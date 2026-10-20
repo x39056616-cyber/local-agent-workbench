@@ -100,6 +100,8 @@ node scripts/browser-check.ts
 node scripts/browser-task.ts
 npm run test:upgrade
 node scripts/model-check.ts
+node scripts/connector-check.ts
+node scripts/pages-check.ts
 ```
 
 真实引擎验收会使用现有账号和本地模型。固定三引擎验收的监视器仅批准该验收明确要求的 Harness/Qwen 委派，其他未知审批仍交给网页。
