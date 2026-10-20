@@ -1,0 +1,13 @@
+import {chromium} from '@playwright/test';
+import assert from 'node:assert/strict';
+import {writeFile} from 'node:fs/promises';
+const browser=await chromium.launch({channel:'chrome',headless:true}),errors:string[]=[];
+try{const page=await browser.newPage({viewport:{width:1440,height:1100}});page.on('pageerror',e=>errors.push(e.message));await page.goto('http://127.0.0.1:4317/');await page.getByRole('button',{name:'知识与记忆'}).click();
+ await page.getByLabel('资料标题').fill('浏览器验收资料');await page.getByLabel('资料正文').fill('春季旅行计划：从杭州乘高铁前往上海，安排一天参观博物馆。');await page.getByRole('button',{name:'导入并建立向量'}).click();await page.getByText('浏览器验收资料',{exact:true}).waitFor({timeout:90000});
+ await page.getByLabel('语义检索').fill('去上海看展览的行程');await page.getByRole('button',{name:'检索',exact:true}).click();await page.getByText(/模式：hybrid/).waitFor({timeout:90000});assert(await page.getByText(/春季旅行计划/).count());await page.screenshot({path:'acceptance/upgrade-knowledge.png',fullPage:true});
+ await page.getByRole('button',{name:'删除资料与向量'}).last().click();
+ await page.getByRole('button',{name:'运行设置'}).click();await page.getByLabel('Codex 模型').waitFor();await page.waitForFunction(()=>Array.from(document.querySelectorAll('select[aria-label="Codex 模型"] option')).length>1);await page.getByLabel('Codex 强度').selectOption('high');await page.getByLabel('本地 Qwen 强度').selectOption('none');await page.screenshot({path:'acceptance/upgrade-settings.png',fullPage:true});
+ await page.getByRole('button',{name:'能力与工具'}).click();await page.getByRole('button',{name:'检测桌面连接器'}).click();await page.getByRole('heading',{name:'GitHub',exact:true}).waitFor({timeout:90000});await page.screenshot({path:'acceptance/upgrade-connectors.png',fullPage:true});
+ for(const width of [820,390]){await page.setViewportSize({width,height:1000});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'连接器页面溢出 '+width);await page.getByRole('button',{name:'知识与记忆'}).click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'知识库页面溢出 '+width);await page.getByRole('button',{name:'运行设置'}).click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'设置页面溢出 '+width);await page.screenshot({path:'acceptance/upgrade-'+width+'.png',fullPage:true});await page.getByRole('button',{name:'能力与工具'}).click();}
+ assert.deepEqual(errors,[]);await writeFile('acceptance/browser-upgrade.json',JSON.stringify({passed:true,pageErrors:errors,importSearchDelete:true,modelPicker:true,connectors:true,responsive:[1440,820,390]},null,2));console.log('新增网页功能验收通过');
+}finally{await browser.close();}

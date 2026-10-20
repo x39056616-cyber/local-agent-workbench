@@ -1,0 +1,70 @@
+import { EventEmitter } from 'node:events';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { config, errorText } from './config.ts';
+import type { Task, RunContext } from './config.ts';
+import { Store } from './store.ts';
+import { Tools, toolSpecs, safePath } from './tools.ts';
+import { Engines } from './engines.ts';
+
+export class Agent extends EventEmitter {
+  store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
+  approvals=new Map<string,{resolve:(answer:boolean)=>void;taskId:string}>();
+  constructor(store:Store,token:string){
+    super();this.store=store;this.tools=new Tools(store);this.engines=new Engines(token,toolSpecs);
+    this.tools.delegate=(engine,prompt,ctx)=>this.engines.run(engine,prompt,ctx,true);
+    this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
+  }
+  emitEvent(taskId:string,type:string,engine:string,data:any){const e=this.store.event(taskId,type,engine,data);this.emit('event',e);}
+  async enqueue(task:Task){this.emitEvent(task.id,'status','system',{status:'queued'});void this.pump();}
+  async pump(){
+    if(this.active)return;
+    const task=this.store.list().reverse().find(t=>t.status==='queued');if(!task)return;
+    const controller=new AbortController();
+    const ctx:RunContext={task,signal:controller.signal,emit:(type,engine,data)=>this.emitEvent(task.id,type,engine,data),tool:(name,args,engine)=>this.tools.call(ctx,name,args,engine)};
+    this.active={id:task.id,controller,ctx};
+    const timeout=setTimeout(()=>controller.abort(new Error('已达到任务时限')),this.store.setting('timeoutMinutes',30)*60000);
+    this.store.update(task.id,{status:'running',error:''});ctx.emit('status','system',{status:'running'});
+    const startEvent=this.store.events(task.id).at(-1)?.id||0;
+    try{
+      await fs.mkdir(task.workspace,{recursive:true});
+      const history=this.store.events(task.id).filter(e=>['engine_done','checkpoint','tool_done'].includes(e.type)).slice(-10).map(e=>({type:e.type,engine:e.engine,data:e.data}));
+      const retrieved=await this.tools.retrieval.search(task.prompt,'all',task.id,controller.signal);
+      const memory=retrieved.hits.map((m:any)=>`[${m.scope} / ${m.title||m.source}] ${m.text}`).join('\n');
+      ctx.emit('retrieval','system',{mode:retrieved.mode,hits:retrieved.hits.length,warning:retrieved.warning});
+      const prompt=`任务工作目录：${task.workspace}\n用户任务：${task.prompt}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；成果必须写入工作目录并读取核对。`;
+      const result=await this.engines.run(task.engine==='auto'?'codex':task.engine,prompt,ctx);
+      controller.signal.throwIfAborted();
+      const currentEvents=this.store.events(task.id,startEvent);
+      const rootEngine=task.engine==='auto'?'codex':task.engine;
+      const completion=currentEvents.filter(e=>e.type==='completion'&&e.engine===rootEngine).at(-1);
+      if(!completion){this.store.update(task.id,{result});throw new Error('执行器已结束，但未通过 finish_task 提交可验证的完成声明。请检查回答后继续。');}
+      if(completion.data.outcome!=='completed'){this.store.update(task.id,{result});throw new Error(completion.data.summary||'执行器报告任务尚未完成');}
+      const artifacts=currentEvents.filter(e=>e.type==='artifact');
+      const verified:any[]=[];
+      for(const e of artifacts){try{const p=await safePath(task.workspace,e.data.path),s=await fs.stat(p);verified.push({path:e.data.path,exists:s.isFile(),bytes:s.size});}catch{verified.push({path:e.data.path,exists:false});}}
+      ctx.emit('verification','system',{files:verified,note:'检查已登记文件是否存在；内容正确性与任务相关测试以执行记录为准。'});
+      if(verified.some(x=>!x.exists))throw new Error('部分登记成果不存在，请检查执行记录');
+      await fs.writeFile(path.join(task.workspace,'agent-result.md'),result||'任务执行完毕，请查看工具记录。','utf8');
+      ctx.emit('artifact','system',{path:'agent-result.md'});
+      this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded'});
+    }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});ctx.emit('status','system',{status,error:message});}
+    finally{clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
+  }
+  cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');
+    if(this.active?.id===id){this.store.update(id,{status:'cancelling'});this.emitEvent(id,'status','system',{status:'cancelling'});this.active.controller.abort(new Error('用户停止了任务'));}
+    else if(task.status==='queued'){this.store.update(id,{status:'cancelled'});this.emitEvent(id,'status','system',{status:'cancelled'});}
+  }
+  async approve(ctx:RunContext,action:string,detail:any):Promise<boolean>{
+    ctx.signal.throwIfAborted();const id=randomUUID();
+    this.store.db.prepare('INSERT INTO approvals VALUES(?,?,?,?,?,?)').run(id,ctx.task.id,action,JSON.stringify(detail),'pending',new Date().toISOString());
+    this.store.update(ctx.task.id,{status:'waiting'});ctx.emit('approval','system',{id,action,detail});ctx.emit('status','system',{status:'waiting'});
+    return new Promise<boolean>(resolve=>{
+      const abort=()=>finish(false);
+      const finish=(approved:boolean)=>{ctx.signal.removeEventListener('abort',abort);this.approvals.delete(id);this.store.db.prepare('UPDATE approvals SET status=? WHERE id=?').run(approved?'approved':'declined',id);if(!ctx.signal.aborted){this.store.update(ctx.task.id,{status:'running'});ctx.emit('status','system',{status:'running'});}ctx.emit('approval_resolved','system',{id,approved});resolve(approved);};
+      this.approvals.set(id,{resolve:finish,taskId:ctx.task.id});ctx.signal.addEventListener('abort',abort,{once:true});if(ctx.signal.aborted)finish(false);
+    });
+  }
+  resolveApproval(id:string,approved:boolean){const a=this.approvals.get(id);if(!a)throw new Error('该审批已失效');a.resolve(approved);}
+}

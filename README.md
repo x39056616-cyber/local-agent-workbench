@@ -1,0 +1,127 @@
+# 本地 Agent 工作台
+
+把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen，查看计划、工具执行、结果检查与生成文件。自动模式由 Codex 按需委派，其他模式也能独立调用工具。v0.2 新增本地向量检索、桌面连接器桥、模型与强度选择、GitHub Pages 配对网页。
+
+发布网页：[GitHub Pages](https://x39056616-cyber.github.io/local-agent-workbench/)；源码：[local-agent-workbench](https://github.com/x39056616-cyber/local-agent-workbench)。部署与配对步骤见 [DEPLOY.md](DEPLOY.md)。
+
+## 使用
+
+1. 双击 **启动工作台.cmd**，浏览器打开 <http://127.0.0.1:4317>。
+2. 选择自动协作或一个执行器，描述任务，可附加最多 5 个文件（每个不超过 5 MB）。
+3. 工作目录留空时，在 `data/tasks/` 创建独立目录；也可以明确选择一个已有目录。
+4. 右侧显示计划和成果文件。任务停止或失败后，可检查已有文件，再填写补充要求并点击“继续任务”。
+5. 双击 **停止工作台.cmd** 结束本项目进程。已有 LM Studio/Bionic 和其他桌面应用保持运行。
+
+本机已安装 Node.js 24。依赖和网页已经构建；搬到其他位置后，启动脚本会在依赖缺失时运行 `npm ci`，需要访问 npm。
+
+## 本地 Qwen
+
+- 默认接口：`http://127.0.0.1:1234/v1`。
+- 默认模型：`qwen3.8-27b-gsq-rco`。
+- 保持本机已调好的 32768 上下文、并发 1 及推理参数；工作台不重新加载模型或改模板。
+- 如果模型应用已打开而 API 未开启，双击 **连接本地Qwen.cmd**。该脚本操作 Bionic 的正常“本地模型API”开关，不读取或迁移认证密钥。当前适配 Bionic 1.1.8 的中文界面。
+- “模型已打开”不等于 API 已开启。Bionic 的应用数据在 `~/.lmstudio/apps/bionic/`，旧版 `lms` 可能错误寻找另一实例；本项目此次已通过正常界面恢复 API 服务。
+
+Codex 和 Harness 沿用各自已有账号。登录失效时在原应用登录，不要在聊天、代码或网页里粘贴密钥。
+
+## 与参考思维导图的对应
+
+| 图中的模块 | 当前实现 |
+| --- | --- |
+| 感知—行动—观察循环 | Qwen 原生 tool_calls 循环；Codex、Harness 复用原生 Agent Loop |
+| 大脑与规划 | 系统指令、结构化工具、显式计划、自动模式的一级委派 |
+| 工作记忆 | 引擎当前消息、工具结果、任务事件、继续任务时的检查点摘要 |
+| 长期记忆 | 用户主动添加/删除的事实与偏好，768 维向量与全文混合检索 |
+| 工具注册 | 统一工具目录、类型/枚举/范围校验、超时、预算、错误回传 |
+| MCP | Codex 的项目专用 stdio MCP 桥；Harness 通过本机插件适配同一工具服务 |
+| 观察与验证 | read_file 回读、实际文件检查、完成声明；工具失败不直接当作任务成功 |
+| 循环和成本控制 | 一个顶层任务、Qwen 串行、任务时限、工具调用预算、使用量事件 |
+| 可观测性 | SQLite 追加事件、SSE 实时推送和断线补发、界面执行记录 |
+| 异常与停止 | 请求错误回传、只读模型请求有限重试、取消自有执行器进程、重启后标记中断 |
+
+网页展示简洁计划、行动和证据，不要求模型披露内部思维链。
+
+## 工具与执行边界
+
+内置工具：`plan_update`、`list_files`、`read_file`、`write_file`、`search_files`、`fetch_url`、`run_command`、`tools_search`、`skill_read`、`memory_search`、`knowledge_search`、`knowledge_index`、`desktop_search`、`desktop_call`、`finish_task`；自动模式另有 `delegate`。
+
+所有文件工具检查规范化路径与 junction/symlink。命令经 Codex 的 `workspaceWrite` 沙箱执行，网页显示确认；拒绝后不执行，不降级为无沙箱命令。共享工具调用预算可以在设置中调整；Codex/Harness 内部原生操作遵守各自运行时限制。
+
+公开网页工具拒绝内网和回环地址、校验每次重定向，限制文本大小。Windows 下可复用已配置的本机 HTTP 代理；HTTPS CONNECT 指向已校验的公网 IP，TLS 仍核对原始域名。
+
+本地服务只监听回环地址，验证 Host、Origin、浏览器会话和执行器令牌。执行器令牌仅用于本项目进程通信，不发送到网页。Harness 的独立运行数据放在 `data/harness/`，通过原有凭据提供者复用账号，不复制用户凭据到项目。
+
+## 向量检索
+
+“知识与记忆”页面可以添加记忆，导入 UTF-8 文本/Markdown，使用自然语言查询并查看来源片段。默认复用本机已有的 `text-embedding-nomic-embed-text-v1.5`（768 维），不下载新模型。向量、分块文本与模型标识保存在 SQLite；使用余弦相似度与全文命中排名融合。
+
+资料每块最多 900 个 Unicode 字符、重叠 120 字符。模型改变时不会混用维度；索引全部成功后原子替换。删除资料或记忆同时删除相应向量。已保存但向量索引失败的记忆仍可全文检索。模型离线时明确显示全文回退，不冒充语义检索。
+
+任务启动时检索相关资料；执行器还可按需 `knowledge_search`。通过 `knowledge_index` 索引的文件仅对当前任务可见；用户主动导入的全局知识和记忆可供各任务使用。当前采用 SQLite 内扫描，适合个人规模，尚未采用 ANN。现有 Nomic 模型偏向英文，中文召回质量需结合全文与实际资料评估。
+
+在本机 LM Studio 使用公开 `/api/v1/models/load` 单独加载小型 embedding，防止 JIT 模型互相淘汰；不修改 Qwen 的上下文、量化、并发或已保存推理设置。
+
+## 桌面连接器
+
+“能力与工具”→“检测桌面连接器”，通过 Codex App Server 的 `app/installed` 和 `mcpServerStatus/list` 读取已安装运行时状态。当前账号检测到 GitHub、Search Service、Sites 等连接器。实际工具 schema 按需提供给执行器，`desktop_call` 通过官方 `mcpServer/tool/call` 调用并返回结构化业务数据，账号认证仍由 Codex 管理，不导出 OAuth。
+
+共享桥对非只读/权限不明工具逐次确认；拒绝后不会发起调用。未知工具或未启用的连接器被拒绝。Codex 原生连接器继续遵守自身运行时审批。Harness/Qwen 可通过共享桥调用同一批连接器。富媒体、宿主 UI、桌面交互组件不能通过 JSON 桥完整呈现，相关内容在 Codex 桌面查看。某个连接器运行时可调用不代表其所有工具都已完成业务实测。
+
+## 模型与强度
+
+任务输入区可选当前执行器的模型和强度；运行设置可分别配置三个执行者并保存默认值。自动模式的子任务使用各自配置，任务保存提交时配置快照。新任务默认沿用现有设置，不覆盖全局配置。不支持的模型或强度会报错，不静默切换。
+
+- Codex：从真实 `model/list` 获取可选模型与支持的强度，通过 `thread/start.model` 和 `turn/start.effort` 生效。
+- Harness：沿用 `deepseek-account / deepseek-flash`，通过本机 SDK 的 `initialize.reasoningEffort` 选择 `off / low / high / max`。
+- Qwen：当前服务实测 `reasoning_effort:none` 关闭思考，`low` 开启思考；界面分别标为“关闭思考/开启思考”。尚未确认多个深度档位生效，因此不提供虚构的高/中/低。开启沿用现有预算与上下文。
+
+## 当前边界
+
+- Skills 页面“已发现指令”不等于其外部依赖已安装或功能已验证。工具只按需要读取相关 Skill。
+- 已接入 Codex 可发现的桌面连接器；不能据此承诺当前桌面会话的全部宿主工具都能迁移到独立网页。
+- 当前附件会保存到任务目录；内置读取器支持 UTF-8 文本。PDF、Office、图像等二进制处理，需要使用已验证的相应工具/Skill，不能直接用文本读取器解码。
+- 继续任务会给新执行器会话提供已有工具结果与检查点，并要求核对文件。尚未实现任意原生会话内部的精确恢复、步骤输入变化后的完整依赖图失效或外部系统“恰好一次”执行。
+- 完成声明会验证所列文件存在；结论正确性还需任务相关的测试或来源核对。模型的自评不被描述为独立证明。
+- 没有额外购买 API、引入第四个完整 Agent 框架或安装第三方 Skills。长期记忆只由用户显式添加。
+
+## 开发与验收
+
+```powershell
+npm run check
+npm test
+npm run build
+npm run probe
+node scripts/acceptance.ts codex
+node scripts/acceptance.ts harness
+node scripts/acceptance.ts qwen
+node scripts/acceptance.ts team
+node scripts/system-check.ts
+node scripts/browser-check.ts
+node scripts/browser-task.ts
+npm run test:upgrade
+node scripts/model-check.ts
+```
+
+真实引擎验收会使用现有账号和本地模型。固定三引擎验收的监视器仅批准该验收明确要求的 Harness/Qwen 委派，其他未知审批仍交给网页。
+
+`acceptance/` 包含实测 JSON 与截图；`data/` 是本机运行数据，可能包含用户任务与成果，不应随源代码公开。启动脚本需要正常用户环境：开发沙箱中的临时 HOME、网络隔离与子进程限制，不能代表本机应用运行环境。
+
+## 配置
+
+后端直接用 Node.js 24 运行 TypeScript，React 网页由 Vite 构建。SQLite 使用 Node 自带模块。可在启动前设置 `LA_PORT`、`LA_DATA_DIR`、`LA_CODEX_BIN`、`LA_HARNESS_EXE`、`LA_HARNESS_CLI`、`LA_QWEN_URL`、`LA_QWEN_MODEL`、`LA_EMBEDDING_MODEL`、`LA_PUBLISHED_URL`、`LA_WEB_PROXY`；不需要修改原有软件的全局配置。默认端口 4317。
+
+核心文件：`src/agent.ts` 管理生命周期；`src/engines.ts` 管理三引擎；`src/tools.ts` 管理共享工具与边界；`src/store.ts` 持久化；`src/server.ts` 提供网页 API。
+
+## 参考与出处
+
+本项目没有复制以下项目的整套实现。参考其公开文档和相关代码的组织方式，具体适配按本机实测完成：
+
+- [Hello-Agents](https://github.com/datawhalechina/hello-agents)：Agent Loop、记忆、工具与评估的教学结构。
+- [AionUi](https://github.com/iOfficeAI/AionUi)：统一工作台、会话、成员与成果面板的组织方式。本轮按用户强调的思维导图先完成独立核心，未宣称已经完成 AionUi/AionCore 的本机适配验证。
+- [hyspacex/harness-cli](https://github.com/hyspacex/harness-cli)：复用现成执行器、保存执行状态与检查证据。
+- [revfactory/codex-harness](https://github.com/revfactory/codex-harness)：任务输入、文件归属和完成条件的约定。
+- [nanobot](https://github.com/HKUDS/nanobot)：工具循环、会话与长期记忆的分离。
+- [Deep Agents](https://github.com/langchain-ai/deepagents)、[Pi](https://github.com/earendil-works/pi)、[LangGraph](https://github.com/langchain-ai/langgraph)：独立子任务、协议生命周期与持久化的参考。
+- [Codex App Server](https://learn.chatgpt.com/docs/app-server)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[Qwen-Agent](https://github.com/QwenLM/Qwen-Agent)：实际接口与工具调用适配依据。
+
+React、Vite、TypeScript、Undici 与其他依赖的许可证保留在对应 npm 包中，精确版本由 `package-lock.json` 固定。源码公开托管不等于已授予开源许可证，未替用户选择许可证。
