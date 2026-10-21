@@ -1,6 +1,6 @@
 {
   "name": "local-agent-workbench",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,7 +14,8 @@
     "dev": "vite --host 127.0.0.1",
     "check": "tsc --noEmit",
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
-    "probe": "node --disable-warning=ExperimentalWarning scripts/probe.ts"
+    "probe": "node --disable-warning=ExperimentalWarning scripts/probe.ts",
+    "test:mechanisms": "node scripts/mechanisms-check.ts"
   },
   "dependencies": {
     "react": "^19.0.0",

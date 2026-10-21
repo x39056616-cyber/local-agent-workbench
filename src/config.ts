@@ -40,6 +40,7 @@ export interface Task {
 }
 export interface EventRecord { id: number; taskId: string; type: string; engine: string; data: any; created: string }
 export interface RunContext {
+  stage?: {id:string;readOnly:boolean;onSubmitted?:()=>void}; specs?: any[];
   task: Task; signal: AbortSignal; emit: (type: string, engine: string, data: any) => void;
   tool: (name: string, args: any, engine: string) => Promise<any>;
 }

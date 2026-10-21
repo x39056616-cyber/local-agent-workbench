@@ -127,3 +127,7 @@ node scripts/pages-check.ts
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server)、[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)、[Qwen-Agent](https://github.com/QwenLM/Qwen-Agent)：实际接口与工具调用适配依据。
 
 React、Vite、TypeScript、Undici 与其他依赖的许可证保留在对应 npm 包中，精确版本由 `package-lock.json` 固定。源码公开托管不等于已授予开源许可证，未替用户选择许可证。
+
+## 执行机制与基准评估（0.3）
+
+任务输入区可选 ReAct、规划求解、反思、角色协作，工作台自身负责状态迁移与工具反馈。侧栏「基准评估」可导入本地练习题、查看预测和下载报告。范围、成本、官方评估依赖与教程对应见 [MECHANISMS.md](MECHANISMS.md)。

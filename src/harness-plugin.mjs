@@ -10,7 +10,7 @@ export function apply(ctx) {
   for(const s of specs){
     const parameters=Object.fromEntries(Object.entries(s.parameters.properties).map(([k,v])=>[k,{...convert(v),...((s.parameters.required||[]).includes(k)?{required:true}:{})}]));
     ctx.effect(()=>{try{return ctx.tools.register(defineTool({name:s.name,description:s.description,parameters,output:{schema:{type:'string'},render:(_a,value)=>[{type:'text',text:value}]},async execute(args,exec){
-      const r=await fetch(`http://127.0.0.1:${process.env.LA_PORT}/internal/call`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.LA_WORKER_TOKEN},body:JSON.stringify({taskId:process.env.LA_TASK_ID,name:s.name,args,engine:'harness'}),signal:exec.signal});
+      const r=await fetch(`http://127.0.0.1:${process.env.LA_PORT}/internal/call`,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+process.env.LA_WORKER_TOKEN},body:JSON.stringify({taskId:process.env.LA_TASK_ID,stageId:process.env.LA_STAGE_ID||'',name:s.name,args,engine:'harness'}),signal:exec.signal});
       const result=await r.json();if(!r.ok)throw new Error(result.error||'工具执行失败');return JSON.stringify(result);
     }}));}catch(e){process.stderr.write('WORKBENCH_REGISTER_ERROR '+s.name+' '+e.message+'\n');throw e;}});
   }

@@ -7,6 +7,8 @@ import type { Task, RunContext } from './config.ts';
 import { Store } from './store.ts';
 import { Tools, toolSpecs, safePath } from './tools.ts';
 import { Engines } from './engines.ts';
+import {Workflows,validateWorkflow} from './workflows.ts';
+import {runBfcl} from './evaluation.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
@@ -30,11 +32,14 @@ export class Agent extends EventEmitter {
     try{
       await fs.mkdir(task.workspace,{recursive:true});
       const history=this.store.events(task.id).filter(e=>['engine_done','checkpoint','tool_done'].includes(e.type)).slice(-10).map(e=>({type:e.type,engine:e.engine,data:e.data}));
-      const retrieved=await this.tools.retrieval.search(task.prompt,'all',task.id,controller.signal);
+      const evaluation=JSON.parse(task.options||'{}').evaluation;
+      const retrieved=evaluation?{hits:[],mode:'evaluation-isolated',warning:''}:await this.tools.retrieval.search(task.prompt,'all',task.id,controller.signal);
       const memory=retrieved.hits.map((m:any)=>`[${m.scope} / ${m.title||m.source}] ${m.text}`).join('\n');
       ctx.emit('retrieval','system',{mode:retrieved.mode,hits:retrieved.hits.length,warning:retrieved.warning});
       const prompt=`任务工作目录：${task.workspace}\n用户任务：${task.prompt}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；成果必须写入工作目录并读取核对。`;
-      const result=await this.engines.run(task.engine==='auto'?'codex':task.engine,prompt,ctx);
+      const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
+      ctx.emit('workflow_start','system',workflow);
+      const result=evaluation?.kind==='bfcl'?await runBfcl(ctx,evaluation):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt,ctx,workflow);
       controller.signal.throwIfAborted();
       const currentEvents=this.store.events(task.id,startEvent);
       const rootEngine=task.engine==='auto'?'codex':task.engine;
@@ -46,6 +51,7 @@ export class Agent extends EventEmitter {
       for(const e of artifacts){try{const p=await safePath(task.workspace,e.data.path),s=await fs.stat(p);verified.push({path:e.data.path,exists:s.isFile(),bytes:s.size});}catch{verified.push({path:e.data.path,exists:false});}}
       ctx.emit('verification','system',{files:verified,note:'检查已登记文件是否存在；内容正确性与任务相关测试以执行记录为准。'});
       if(verified.some(x=>!x.exists))throw new Error('部分登记成果不存在，请检查执行记录');
+      if(evaluation?.kind==='gaia'){const answer=await fs.readFile(await safePath(task.workspace,'answer.txt'),'utf8');await fs.writeFile(path.join(task.workspace,'prediction.json'),JSON.stringify(answer.trim()));ctx.emit('artifact','system',{path:'prediction.json'});}
       await fs.writeFile(path.join(task.workspace,'agent-result.md'),result||'任务执行完毕，请查看工具记录。','utf8');
       ctx.emit('artifact','system',{path:'agent-result.md'});
       this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded'});

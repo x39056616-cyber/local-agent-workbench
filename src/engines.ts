@@ -12,7 +12,7 @@ export const SYSTEM = `你是用户的本地通用 Agent。始终用简体中文
 遇到失败先分析工具反馈再更换方法，不要无限重试。调用工具创建用户需要的成果，结束时必须调用 finish_task，列出工作区内的真实成果路径；无法完成时 outcome 使用 blocked，不能冒充完成。`;
 
 function processEnv(ctx: RunContext, token: string): NodeJS.ProcessEnv {
-  const env:NodeJS.ProcessEnv={...process.env,LA_WORKER_TOKEN:token,LA_TASK_ID:ctx.task.id,LA_PORT:String(config.port)};
+  const env:NodeJS.ProcessEnv={...process.env,LA_WORKER_TOKEN:token,LA_TASK_ID:ctx.task.id,LA_STAGE_ID:ctx.stage?.id||'',LA_PORT:String(config.port)};
   for(const key of Object.keys(env)) if((key.startsWith('CODEX_')&&!['CODEX_HOME','CODEX_API_KEY'].includes(key))||/^(CLAUDECODE|CLAUDE_CODE_)/.test(key))delete env[key];
   return env;
 }
@@ -37,7 +37,7 @@ export class Engines {
     const profile=JSON.parse(ctx.task.options||'{}').qwen||{};
     const reasoning=profile.effort==='none'?'none':profile.effort==='on'?'low':undefined;
     ctx.emit('model_config','qwen',{model:config.qwenModel,effort:profile.effort||'inherit',parameter:reasoning?{reasoning_effort:reasoning}:null,note:'on 仅开启思考，沿用模型现有预算'});
-    const messages:any[]=[{role:'system',content:SYSTEM},{role:'user',content:prompt}];
+    const messages:any[]=[{role:'system',content:ctx.stage?'你是工作台的受控执行阶段。遵守当前阶段格式，用 submit_stage 提交，不输出内部思维链。':SYSTEM},{role:'user',content:prompt}];
     const limit=30;
     for(let step=0;step<limit;step++){
       ctx.signal.throwIfAborted();
@@ -52,7 +52,7 @@ export class Engines {
       }
       let response:Response|undefined;
       for(let attempt=0;attempt<3;attempt++){
-        try {response=await fetch(config.qwenBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:config.qwenModel,messages,tools:this.specs(false).map(s=>({type:'function',function:s})),tool_choice:'auto',max_tokens:4096,stream:false,...(reasoning?{reasoning_effort:reasoning}:{})}),signal:ctx.signal});if(response.status>=500 && attempt<2){await response.body?.cancel();continue;}break;}catch(e){if(ctx.signal.aborted||attempt===2)throw new Error('Qwen 请求失败：'+errorText(e));}
+        try {response=await fetch(config.qwenBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:config.qwenModel,messages,tools:(ctx.specs??this.specs(false)).map(s=>({type:'function',function:s})),tool_choice:'auto',max_tokens:4096,stream:false,...(reasoning?{reasoning_effort:reasoning}:{})}),signal:ctx.signal});if(response.status>=500 && attempt<2){await response.body?.cancel();continue;}break;}catch(e){if(ctx.signal.aborted||attempt===2)throw new Error('Qwen 请求失败：'+errorText(e));}
       }
       if(!response?.ok)throw new Error('Qwen 返回 HTTP '+response?.status);
       const data:any=await response.json(), message=data.choices?.[0]?.message;
@@ -65,6 +65,7 @@ export class Engines {
         ctx.signal.throwIfAborted(); let result:any;
         try {result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'qwen');} catch(e) {result={error:errorText(e)};}
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});
+        if(ctx.stage&&call.function.name==='submit_stage'&&result?.accepted)return '阶段结果已提交';
       }
     }
     throw new Error('Qwen 已达到 30 轮调用上限，进度已保存。');
@@ -72,17 +73,18 @@ export class Engines {
   async codex(prompt:string,ctx:RunContext,delegation:boolean):Promise<string> {
     const bridge=path.join(config.root,'src/mcp-bridge.ts');
     const profile=JSON.parse(ctx.task.options||'{}').codex||{};
-    const args=['app-server','-c','features.apps=true','-c',`mcp_servers.workbench.command=${JSON.stringify(process.execPath)}`,'-c',`mcp_servers.workbench.args=${JSON.stringify([bridge])}`,'-c','mcp_servers.workbench.env_vars=["LA_WORKER_TOKEN","LA_TASK_ID","LA_PORT","LA_DELEGATION"]'];
+    const args=['app-server',...(ctx.stage?['-c','mcp_servers={}']:[]),'-c',`features.apps=${ctx.stage?'false':'true'}`,'-c',`mcp_servers.workbench.command=${JSON.stringify(process.execPath)}`,'-c',`mcp_servers.workbench.args=${JSON.stringify([bridge])}`,'-c','mcp_servers.workbench.env_vars=["LA_WORKER_TOKEN","LA_TASK_ID","LA_PORT","LA_DELEGATION","LA_STAGE_ID"]'];
     const rpc=new Rpc(config.codex,args,{cwd:ctx.task.workspace,env:{...processEnv(ctx,this.token),LA_DELEGATION:delegation?'1':'0'}});
     const abort=()=>{rpc.kill();}; ctx.signal.addEventListener('abort',abort,{once:true});
     let text='',threadId='';
     try{
       await rpc.request('initialize',{clientInfo:{name:'local_agent_workbench',title:'本地 Agent 工作台',version:'0.1.0'}},20000);
       rpc.notify('initialized');
-      const started=await rpc.request('thread/start',{cwd:ctx.task.workspace,approvalPolicy:'on-request',sandbox:'workspace-write',developerInstructions:SYSTEM,...(profile.model?{model:profile.model}:{})},30000);
+      const started=await rpc.request('thread/start',{cwd:ctx.task.workspace,approvalPolicy:'on-request',sandbox:ctx.stage?'read-only':'workspace-write',developerInstructions:ctx.stage?'你是受控执行阶段。只使用 workbench MCP 的工具，遵守阶段要求，用 submit_stage 提交结构化结果，禁止原生工具或自行执行动作。':SYSTEM,...(profile.model?{model:profile.model}:{})},30000);
       ctx.emit('model_config','codex',{model:started.model,effort:profile.effort||started.reasoningEffort||'inherit',requested:profile});
       threadId=started.thread.id;ctx.emit('session','codex',{id:threadId});
       const done=new Promise<string>((resolve,reject)=>{
+        if(ctx.stage)ctx.stage.onSubmitted=()=>resolve('结构化阶段结果已提交');
         const onClosed=()=>reject(new Error(ctx.signal.aborted?'任务已停止':'Codex 进程意外退出'));
         rpc.once('closed',onClosed);
         rpc.on('message',async m=>{
@@ -125,8 +127,8 @@ export class Engines {
     const dir=path.join(config.data,'harness');mkdirSync(dir,{recursive:true});
     const patch=path.join(dir,'bridge.patch.yml');
     const dangerous=['tool-bash','tool-pwsh','tool-jobs','tool-fs','tool-fs-search','tool-skill','tool-subagent','tool-subagent-fork','tool-subagent-control','tool-subagent-list-agents','tool-workflow','tool-web','tool-plugin-manager','tool-goal','tool-ralph','tool-todo','agent-instructions'];
-    const tools=this.specs(false);
-    writeFileSync(patch,dangerous.map(id=>`- id: ${id}\n  disabled: true`).join('\n')+`\n- id: credentials\n  config:\n    path: ${JSON.stringify(path.join(os.homedir(),'.dsh/.credentials.yaml'))}\n- id: session-persistence-jsonl\n  config:\n    root: ${JSON.stringify(path.join(dir,'sessions'))}\n- id: system-prompt\n  config:\n    personaPrefix: ${JSON.stringify(SYSTEM)}\n- insert:\n    - id: workbench-bridge\n      name: ${JSON.stringify(path.join(config.root,'src/harness-plugin.mjs'))}\n`);
+    const tools=ctx.specs??this.specs(false);
+    writeFileSync(patch,dangerous.map(id=>`- id: ${id}\n  disabled: true`).join('\n')+`\n- id: credentials\n  config:\n    path: ${JSON.stringify(path.join(os.homedir(),'.dsh/.credentials.yaml'))}\n- id: session-persistence-jsonl\n  config:\n    root: ${JSON.stringify(path.join(dir,'sessions'))}\n- id: system-prompt\n  config:\n    personaPrefix: ${JSON.stringify(ctx.stage?'你是受控执行阶段。只使用本阶段共享工具，用 submit_stage 提交结构化结果。':SYSTEM)}\n- insert:\n    - id: workbench-bridge\n      name: ${JSON.stringify(path.join(config.root,'src/harness-plugin.mjs'))}\n`);
     const env={...processEnv(ctx,this.token),ELECTRON_RUN_AS_NODE:'1',DSH_HOME:path.join(dir,'home'),LA_TOOLS_SPEC:JSON.stringify(tools),LA_DSH_TOOLS_URL:'file:///'+path.join(path.dirname(config.harnessExe),'resources/app.asar/dsh/node_modules/@deepseek-ai/dsh-tools/lib/index.js').replaceAll('\\','/')};
     const rpc=new Rpc(config.harnessExe,['--expose-internals',config.harnessCli,'--profile','sdk','--patch',patch],{cwd:ctx.task.workspace,env});
     const abort=()=>rpc.kill();ctx.signal.addEventListener('abort',abort,{once:true});
@@ -137,6 +139,7 @@ export class Engines {
       if(!rpc.stderr.includes('WORKBENCH_BRIDGE_READY'))throw new Error('工作台工具桥未完整加载，已停止模型调用。请运行 npm run probe 检查安装。');
       ctx.emit('session','harness',{id:sessionId});
       const done=new Promise<string>((resolve,reject)=>{
+        if(ctx.stage)ctx.stage.onSubmitted=()=>resolve('结构化阶段结果已提交');
         rpc.once('closed',()=>reject(new Error(ctx.signal.aborted?'任务已停止':'Harness 进程退出')));
         rpc.on('message',m=>{
           const p=m.params||{};if(p.sessionId!==sessionId)return;

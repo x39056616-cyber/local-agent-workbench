@@ -22,3 +22,13 @@
 “运行时可调用”不表示每个连接器的所有业务工具都已测试。富媒体与宿主 UI 能力仍需在 Codex 桌面查看。当前向量检索适合个人资料量；现有 Nomic 模型的中文语义质量有局限，保留全文检索补充召回。
 
 可复测命令与部署步骤见 [README.md](README.md) 和 [DEPLOY.md](DEPLOY.md)。
+
+## 2026-10-21：机制与评估升级
+
+- `npm run check`、17 项单测通过。涵盖计划依赖/角色校验、ReAct 真动作、反思失败阻止完成、取消、未知副作用不重放、续接、评分规则。Windows junction 用正常用户环境验收。
+- 真实 Qwen：ReAct 3 阶段、规划求解 5 阶段、反思 4 阶段，均生成并读取 answer.txt。
+- 真实三引擎：Codex 规划，Qwen 返回 56，Harness 写文件，Codex 汇总核对。首次因 Codex 连接重试达到测试 10 分钟限额；重启测试服务并续接成功。整个任务写文件动作仅 1 次，三引擎都有实际执行记录。
+- 自编 GAIA 方法练习与 BFCL 单轮工具调用各 1 题通过；这是管线验收，不是官方基准准确率。
+- Playwright：角色编辑、网页真实提交 BFCL 练习、结果展示、报告下载、1440/820/390 布局通过，页面错误为 0；已修复第五个导航项导致的手机宽度溢出。
+- 官方 BFCL 可选入口 doctor 明确报告缺少 bfcl-eval。未安装整套依赖，未完成官方评分器联调，未运行官方 GAIA/BFCL 题库或提交榜单。GAIA 附件题、多轮 BFCL 仍不在网页评分范围。
+- 本机验收证据位于忽略的 acceptance/mechanisms.json、team-resume.json、eval-gaia.json、eval-bfcl.json、browser-mechanisms.json；原始题目与运行资料不上传。

@@ -8,9 +8,12 @@ import { Store } from './store.ts';
 import { Agent } from './agent.ts';
 import { safePath, toolSpecs } from './tools.ts';
 import { modelCatalog, validateProfiles } from './profiles.ts';
+import {validateWorkflow} from './workflows.ts';
+import {Evaluation,evaluationExamples} from './evaluation.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
+const evaluation=new Evaluation(store,agent);
 let pairedOrigin='',pairedToken='';
 const remoteStreams=new Set<http.ServerResponse>();
 function revokePair(){pairedOrigin='';pairedToken='';for(const stream of remoteStreams)stream.end();remoteStreams.clear();}
@@ -37,7 +40,8 @@ const server=http.createServer(async(req,res)=>{
       const data=await body(req);
       const active=agent.active;
       if(!active||active.id!==data.taskId)return json(res,409,{error:'任务已不在运行'});
-      if(url.pathname==='/internal/tools')return json(res,200,toolSpecs(data.delegation===true&&active.ctx.task.engine==='auto'));
+      if((data.stageId||'')!==(active.ctx.stage?.id||''))return json(res,409,{error:'执行阶段已失效'});
+      if(url.pathname==='/internal/tools')return json(res,200,active.ctx.specs??toolSpecs(data.delegation===true&&active.ctx.task.engine==='auto'));
       if(url.pathname==='/internal/call')return json(res,200,await active.ctx.tool(data.name,data.args||{},data.engine==='harness'?'harness':'codex'));
       return json(res,404,{error:'接口不存在'});
     }
@@ -56,6 +60,10 @@ const server=http.createServer(async(req,res)=>{
         return json(res,200,{url:target.href+'#'+new URLSearchParams({backend:'http://127.0.0.1:'+config.port,token:pairedToken}).toString()});
       }
       if(url.pathname==='/api/pair'&&req.method==='DELETE'){if(remote)return json(res,403,{error:'请在本机工作台关闭连接'});revokePair();return json(res,200,{ok:true});}
+      if(url.pathname==='/api/evaluations/examples'&&req.method==='GET')return json(res,200,evaluationExamples);
+      if(url.pathname==='/api/evaluations'&&req.method==='GET')return json(res,200,await evaluation.list());
+      if(url.pathname==='/api/evaluations'&&req.method==='POST'){const d=await body(req);if(!['auto','codex','harness','qwen'].includes(d.engine))throw new Error('执行器无效');d.options=await validateProfiles(d.options??{},agent.tools.desktop);d.workflow=validateWorkflow(d.workflow,d.engine);return json(res,201,await evaluation.create(d));}
+      if(url.pathname.startsWith('/api/evaluations/')&&req.method==='DELETE'){evaluation.cancel(url.pathname.split('/').at(-1)!);return json(res,200,{ok:true});}
       if(url.pathname==='/api/models'&&req.method==='GET')return json(res,200,await modelCatalog(agent.tools.desktop));
       if(url.pathname==='/api/connectors'&&req.method==='GET')return json(res,200,await agent.tools.desktop.status(url.searchParams.get('refresh')==='1'));
       if(url.pathname==='/api/health'&&req.method==='GET'){
@@ -68,6 +76,7 @@ const server=http.createServer(async(req,res)=>{
         const data=await body(req);if(typeof data.prompt!=='string'||!data.prompt.trim()||data.prompt.length>30000)throw new Error('请输入 1–30000 字符的任务');
         if(!['auto','codex','harness','qwen'].includes(data.engine))throw new Error('执行器无效');
         const profiles=await validateProfiles(data.options??store.setting('profiles',{}),agent.tools.desktop);
+        const taskOptions={...profiles,workflow:validateWorkflow(data.workflow,data.engine)};
         if(data.files!==undefined&&(!Array.isArray(data.files)||data.files.length>5))throw new Error('最多上传 5 个附件');
         const uploads=(data.files||[]).map((file:any)=>{if(typeof file.name!=='string'||typeof file.base64!=='string')throw new Error('附件无效');const name=path.basename(file.name).replace(/[^\p{L}\p{N}._ -]/gu,'_');if(!name||['.','..'].includes(name))throw new Error('附件名称无效');const bytes=Buffer.from(file.base64,'base64');if(bytes.length>5_000_000)throw new Error('附件超过 5 MB');return {name,bytes};});
         if(data.workspace && !path.isAbsolute(data.workspace))throw new Error('任务目录必须是绝对路径');
@@ -77,7 +86,7 @@ const server=http.createServer(async(req,res)=>{
         for(const file of uploads){const p=await safePath(realWorkspace,path.join('attachments',randomBytes(3).toString('hex')+'-'+file.name));await fs.mkdir(path.dirname(p),{recursive:true});await fs.writeFile(p,file.bytes,{flag:'wx'});attachmentRecords.push({path:path.relative(realWorkspace,p),bytes:file.bytes.length});}
         const attachmentPrompt=attachmentRecords.length?'\n附件文件：\n'+attachmentRecords.map(f=>f.path).join('\n'):'';
         const task=store.create(data.prompt.trim()+attachmentPrompt,data.engine as Engine,realWorkspace);
-        store.update(task.id,{options:JSON.stringify(profiles)});task.options=JSON.stringify(profiles);
+        store.update(task.id,{options:JSON.stringify(taskOptions)});task.options=JSON.stringify(taskOptions);
         for(const file of attachmentRecords)agent.emitEvent(task.id,'attachment','user',file);
         await agent.enqueue(task);return json(res,201,task);
       }

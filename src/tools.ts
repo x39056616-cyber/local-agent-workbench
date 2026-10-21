@@ -103,6 +103,7 @@ export class Tools {
   }
   async call(ctx:RunContext,name:string,args:any,engine:string):Promise<any>{
     ctx.signal.throwIfAborted();
+    if(JSON.parse(ctx.task.options||'{}').evaluation&&['memory_search','knowledge_search','knowledge_index'].includes(name))throw new Error('评估任务禁用私人记忆和知识检索，避免答案泄漏');
     if(name==='__approval')return {approved:await this.approval(ctx,args.action,args.detail)};
     const definition=toolSpecs(true).find(s=>s.name===name);if(!definition)throw new Error('未知工具：'+name);
     if(!args||typeof args!=='object'||Array.isArray(args))throw new Error('工具参数必须是对象');
@@ -113,7 +114,7 @@ export class Tools {
       if(property.enum&&!property.enum.includes(value))throw new Error('参数不在允许的选项中：'+key);
       if(typeof value==='number'&&((property.minimum!==undefined&&value<property.minimum)||(property.maximum!==undefined&&value>property.maximum)))throw new Error('参数超出允许范围：'+key);
     }
-    const countKey=ctx.task.id+':'+engine,count=(this.counts.get(countKey)||0)+1;
+    const countKey=ctx.task.id+':'+engine,count=(this.counts.get(countKey)??this.store.events(ctx.task.id).filter(e=>e.type==='tool_start'&&e.engine===engine).length)+1;
     if(count>this.store.setting('maxCalls',30))throw new Error('已达到该执行器工具调用预算');this.counts.set(countKey,count);
     const id=randomUUID();
     this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?,?,?)').run(id,ctx.task.id,name,JSON.stringify(args),'running','',new Date().toISOString());
