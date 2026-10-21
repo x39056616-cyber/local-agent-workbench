@@ -26,6 +26,6 @@ if (-not $running) {
     }
 }
 if (-not $running) { throw "启动失败，请查看 $agentData\server-error.log" }
-try { Invoke-RestMethod "$agentUrl/api/runtime/qwen" -Method Post -ContentType 'application/json' -Body '{}' -WebSession $agentSession -TimeoutSec 5 | Out-Null; Write-Host 'Qwen 正在后台准备，网页将显示进度。' } catch { Write-Warning 'Qwen 自动准备尚未启动，请在网页中点击重试。' }
+try { $modelPreparation=Invoke-RestMethod "$agentUrl/api/runtime/qwen" -Method Post -ContentType 'application/json' -Body '{}' -WebSession $agentSession -TimeoutSec 5; Write-Host $modelPreparation.message } catch { Write-Warning 'Qwen 自动准备尚未启动，请在网页中点击重试。' }
 Write-Host "本地 Agent 已启动：$agentUrl"
 if (-not $NoBrowser) { Start-Process $agentUrl }
