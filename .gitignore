@@ -15,3 +15,5 @@ work/
 
 *.dpapi
 .agent-reports/
+
+.taste-skill/
