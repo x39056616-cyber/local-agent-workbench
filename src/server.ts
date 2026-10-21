@@ -10,6 +10,7 @@ import { safePath, toolSpecs } from './tools.ts';
 import { modelCatalog, validateProfiles } from './profiles.ts';
 import {validateWorkflow} from './workflows.ts';
 import {Evaluation,evaluationExamples} from './evaluation.ts';
+import {isGreeting} from './routing.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -47,12 +48,12 @@ const server=http.createServer(async(req,res)=>{
     }
     if(url.pathname==='/api/session'&&req.method==='GET'&&!remote){
       res.setHeader('Set-Cookie',`la_session=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`);
-      return json(res,200,{ready:true,local:true,publishedUrl:config.publishedUrl,defaultWorkspace:path.join(config.data,'tasks'),profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
+      return json(res,200,{ready:true,version:'0.4.0',local:true,publishedUrl:config.publishedUrl,defaultWorkspace:path.join(config.data,'tasks'),profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
     }
     if(url.pathname.startsWith('/api/')){
       const cookies=String(req.headers.cookie||'').split(';').map(s=>s.trim());
       if(remote?!trustedRemote||!equal(req.headers.authorization||'','Bearer '+pairedToken):!cookies.some(c=>equal(c,'la_session='+cookieToken)))return json(res,401,{error:'本地会话或网页配对已失效，请从本机工作台重新连接'});
-      if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{ready:true,local:false,publishedUrl:config.publishedUrl,profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
+      if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{ready:true,version:'0.4.0',local:false,publishedUrl:config.publishedUrl,profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
       if(url.pathname==='/api/pair'&&req.method==='POST'){
         if(remote)return json(res,403,{error:'只能在本机工作台开启连接'});
         const target=new URL(config.publishedUrl);if(target.protocol!=='https:')throw new Error('发布地址必须使用 HTTPS');
@@ -60,6 +61,8 @@ const server=http.createServer(async(req,res)=>{
         return json(res,200,{url:target.href+'#'+new URLSearchParams({backend:'http://127.0.0.1:'+config.port,token:pairedToken}).toString()});
       }
       if(url.pathname==='/api/pair'&&req.method==='DELETE'){if(remote)return json(res,403,{error:'请在本机工作台关闭连接'});revokePair();return json(res,200,{ok:true});}
+      if(url.pathname==='/api/providers/deepseek'&&req.method==='GET')return json(res,200,agent.engines.provider.status());
+      if(url.pathname.startsWith('/api/providers/deepseek')&&['POST','DELETE'].includes(req.method||'')){if(remote)return json(res,403,{error:'密钥和接入配置请在本机工作台修改'});if(agent.active||agent.chats.size)return json(res,409,{error:'请等待执行结束或停止任务后再修改模型接入'});if(url.pathname.endsWith('/test'))return json(res,200,await agent.engines.provider.test());if(req.method==='DELETE')return json(res,200,agent.engines.provider.clearKey());return json(res,200,await agent.engines.provider.save(await body(req)));}
       if(url.pathname==='/api/evaluations/examples'&&req.method==='GET')return json(res,200,evaluationExamples);
       if(url.pathname==='/api/evaluations'&&req.method==='GET')return json(res,200,await evaluation.list());
       if(url.pathname==='/api/evaluations'&&req.method==='POST'){const d=await body(req);if(!['auto','codex','harness','qwen'].includes(d.engine))throw new Error('执行器无效');d.options=await validateProfiles(d.options??{},agent.tools.desktop);d.workflow=validateWorkflow(d.workflow,d.engine);return json(res,201,await evaluation.create(d));}
@@ -71,12 +74,18 @@ const server=http.createServer(async(req,res)=>{
         const desktop=agent.tools.desktop.snapshot;
         return json(res,200,{engines,tools:toolSpecs(true),skills:agent.tools.skills,retrieval:agent.tools.retrieval.status(),connectors:{checkedAt:desktop.checkedAt,apps:desktop.apps,error:desktop.error,detail:desktop.checkedAt?'已通过 Codex App Server 验证运行时状态；媒体及宿主交互工具仍需桌面查看。':'点击检测连接器，核对当前登录下可用的桌面能力。'}});
       }
-      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list());
+      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list().filter(t=>Boolean(t.archived)===(url.searchParams.get('archived')==='1')));
       if(url.pathname==='/api/tasks'&&req.method==='POST'){
         const data=await body(req);if(typeof data.prompt!=='string'||!data.prompt.trim()||data.prompt.length>30000)throw new Error('请输入 1–30000 字符的任务');
         if(!['auto','codex','harness','qwen'].includes(data.engine))throw new Error('执行器无效');
-        const profiles=await validateProfiles(data.options??store.setting('profiles',{}),agent.tools.desktop);
-        const taskOptions={...profiles,workflow:validateWorkflow(data.workflow,data.engine)};
+        if(data.intent!==undefined&&!['auto','chat','task'].includes(data.intent))throw new Error('任务类型无效');
+        const workflow=validateWorkflow(data.workflow,data.engine);
+        const chat=data.intent==='chat'||data.intent!=='task'&&isGreeting(data.prompt)&&['native','balanced'].includes(workflow.mode);
+        if(chat&&data.files?.length)throw new Error('带附件请使用工具任务类型，快捷对话不读取附件');
+        const requested=data.options??store.setting('profiles',{}),target=data.engine==='auto'?'qwen':data.engine;
+        const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
+        if(chat&&isGreeting(data.prompt)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
+        const taskOptions={...profiles,workflow,intent:chat?'chat':data.intent||'auto'};
         if(data.files!==undefined&&(!Array.isArray(data.files)||data.files.length>5))throw new Error('最多上传 5 个附件');
         const uploads=(data.files||[]).map((file:any)=>{if(typeof file.name!=='string'||typeof file.base64!=='string')throw new Error('附件无效');const name=path.basename(file.name).replace(/[^\p{L}\p{N}._ -]/gu,'_');if(!name||['.','..'].includes(name))throw new Error('附件名称无效');const bytes=Buffer.from(file.base64,'base64');if(bytes.length>5_000_000)throw new Error('附件超过 5 MB');return {name,bytes};});
         if(data.workspace && !path.isAbsolute(data.workspace))throw new Error('任务目录必须是绝对路径');
@@ -102,9 +111,11 @@ const server=http.createServer(async(req,res)=>{
           const timer=setInterval(()=>res.write(': keepalive\n\n'),15000);
           req.on('close',()=>{clearInterval(timer);agent.removeListener('event',send);remoteStreams.delete(res);});return;
         }
+        if(action==='archive'&&req.method==='POST'){const d=await body(req);if(typeof d.archived!=='boolean')throw new Error('归档参数无效');store.archive(task.id,d.archived);agent.emitEvent(task.id,'archived','user',{archived:d.archived});return json(res,200,store.get(task.id));}
         if(action==='cancel'&&req.method==='POST'){agent.cancel(task.id);return json(res,200,{ok:true});}
         if(action==='resume'&&req.method==='POST'){
           if(['queued','running','waiting','cancelling'].includes(task.status))return json(res,409,{error:'任务正在执行'});
+          if(task.archived)return json(res,409,{error:'请先取消归档再继续任务'});
           const input=await body(req);if(input.prompt && typeof input.prompt!=='string')throw new Error('补充指令无效');
           store.update(task.id,{status:'queued',error:'',...(input.prompt?{prompt:task.prompt+'\n补充要求：'+input.prompt.slice(0,10000)}:{})});
           agent.emitEvent(task.id,'checkpoint','user',{message:'用户继续任务。先核对已有成果与操作记录。'});
@@ -140,9 +151,9 @@ const server=http.createServer(async(req,res)=>{
 });
 server.listen(config.port,'127.0.0.1',async()=>{
   await fs.writeFile(path.join(config.data,'server.json'),JSON.stringify({pid:process.pid,port:config.port,root:config.root}));
-  console.log(`本地 Agent 工作台：http://127.0.0.1:${config.port}`);void agent.pump();
+  console.log(`本地 Agent 工作台：http://127.0.0.1:${config.port}`);for(const t of store.list().filter(t=>t.status==='queued'))void agent.enqueue(t);void agent.pump();
 });
 server.on('error',e=>{console.error(errorText(e));process.exitCode=1;});
 let closing=false;
-async function shutdown(){if(closing)return;closing=true;if(agent.active)agent.cancel(agent.active.id);server.close();setTimeout(()=>process.exit(0),3000).unref();}
+async function shutdown(){if(closing)return;closing=true;if(agent.active)agent.cancel(agent.active.id);for(const id of agent.chats.keys())agent.cancel(id);server.close();setTimeout(()=>process.exit(0),3000).unref();}
 process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);

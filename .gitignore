@@ -12,3 +12,6 @@ acceptance/
 *.pem
 *.key
 work/
+
+*.dpapi
+.agent-reports/

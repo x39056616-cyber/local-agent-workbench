@@ -1,10 +1,11 @@
 import { config } from './config.ts';
 import type { Desktop } from './desktop.ts';
+import {DeepSeekProvider,deepseekModels,deepseekEfforts} from './providers.ts';
 
 export type Profiles=Record<string,{model?:string;effort?:string}>;
-export async function modelCatalog(desktop:Desktop){const state=await desktop.status();return {
+export async function modelCatalog(desktop:Desktop,includeCodex=true){const state=includeCodex?await desktop.models():{models:[],currentModel:'',currentEffort:'',error:''};const provider=new DeepSeekProvider().status();return {
   codex:{models:state.models,currentModel:state.currentModel,currentEffort:state.currentEffort,error:state.error},
-  harness:{models:[{id:'deepseek-flash',name:'deepseek-account / deepseek-flash',efforts:['off','low','high','max']}],currentModel:'deepseek-flash',error:''},
+  harness:{models:(provider.mode==='api'&&provider.models.length?provider.models:deepseekModels).map((id:string)=>({id,name:(provider.mode==='api'?'API / ':'Harness 账号 / ')+id,efforts:deepseekEfforts})),currentModel:provider.mode==='api'?provider.model:'deepseek-flash',error:'',source:provider.mode,note:'完整显示本机 Harness 支持的 8 档。实际后端映射：minimal→low、medium/xhigh→high、ultra→max；不是 8 种独立推理深度。'},
   qwen:{models:[{id:config.qwenModel,name:config.qwenModel,efforts:['none','on']}],currentModel:config.qwenModel,error:'',note:'当前 LM Studio 的接口仅验证了关闭/开启思考。开启沿用已有预算；不宣称支持多个思考深度。'}
 };}
 export async function validateProfiles(input:any,desktop:Desktop):Promise<Profiles>{
@@ -15,7 +16,7 @@ export async function validateProfiles(input:any,desktop:Desktop):Promise<Profil
     if(!['codex','harness','qwen'].includes(engine)||!p||typeof p!=='object'||Array.isArray(p)||Object.keys(p).some(k=>!['model','effort'].includes(k)))throw new Error('模型配置字段无效');
     if(p.model!==undefined&&typeof p.model!=='string'||p.effort!==undefined&&typeof p.effort!=='string')throw new Error('模型和强度必须是字符串');
     const model=p.model||'',effort=p.effort||'';if(!model&&!effort)continue;
-    catalog ||= await modelCatalog(desktop);const group=catalog[engine as keyof typeof catalog],list=group.models;
+    catalog ||= await modelCatalog(desktop,!!input.codex?.model||!!input.codex?.effort);const group=catalog[engine as keyof typeof catalog],list=group.models;
     const selected=list.find((m:any)=>m.id===(model||group.currentModel||list.find((m:any)=>m.isDefault)?.id));
     if(!selected)throw new Error(engine+' 模型不可用，请刷新能力列表');
     if(effort&&!selected.efforts.includes(effort))throw new Error(engine+' 不支持所选强度：'+effort);

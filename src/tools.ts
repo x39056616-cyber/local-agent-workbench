@@ -155,7 +155,7 @@ export class Tools {
       case 'run_command': {
         if(!Array.isArray(a.command)||a.command.some((x:any)=>typeof x!=='string')||a.command.length===0)throw new Error('command 必须是命令参数数组');
         if(!await this.approval(ctx,'运行沙箱命令',{command:a.command,cwd:ctx.task.workspace}))throw new Error('用户拒绝命令执行');
-        const rpc=new Rpc(config.codex,['app-server'],{cwd:ctx.task.workspace});const abort=()=>rpc.kill();ctx.signal.addEventListener('abort',abort,{once:true});
+        const commandEnv={...process.env};delete commandEnv.LA_DEEPSEEK_API_KEY;const rpc=new Rpc(config.codex,['app-server'],{cwd:ctx.task.workspace,env:commandEnv});const abort=()=>rpc.kill();ctx.signal.addEventListener('abort',abort,{once:true});
         try{await rpc.request('initialize',{clientInfo:{name:'local_agent_command',version:'0.1.0'}});rpc.notify('initialized');return await rpc.request('command/exec',{command:a.command,cwd:ctx.task.workspace,sandboxPolicy:{type:'workspaceWrite'},timeoutMs:Math.min(a.timeoutMs||30000,120000)},125000);}finally{ctx.signal.removeEventListener('abort',abort);await rpc.close();}
       }
       default: throw new Error('未实现该工具');

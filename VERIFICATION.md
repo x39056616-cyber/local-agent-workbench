@@ -32,3 +32,12 @@
 - Playwright：角色编辑、网页真实提交 BFCL 练习、结果展示、报告下载、1440/820/390 布局通过，页面错误为 0；已修复第五个导航项导致的手机宽度溢出。
 - 官方 BFCL 可选入口 doctor 明确报告缺少 bfcl-eval。未安装整套依赖，未完成官方评分器联调，未运行官方 GAIA/BFCL 题库或提交榜单。GAIA 附件题、多轮 BFCL 仍不在网页评分范围。
 - 本机验收证据位于忽略的 acceptance/mechanisms.json、team-resume.json、eval-gaia.json、eval-bfcl.json、browser-mechanisms.json；原始题目与运行资料不上传。
+
+## 2026-10-21：0.4 延迟与多模型协调优化
+
+- 25 项单测及类型检查通过，新增问候路由、归档持久化、三模型后端调度和反馈修订、Qwen 队列取消、Windows DPAPI、API 凭据不回显、原生工具调用与思考字段回传、流式正文解析。
+- 真实请求：自动问候 Qwen 约 0.65 秒，首段约 0.14–0.22 秒；DeepSeek Harness 约 2.2–2.8 秒；Codex HTTP 对话约 9.7–13.9 秒，均无连接重试。Qwen 首次加载曾约 12 秒，不把热启动实测当作固定承诺。
+- 默认均衡协作实际依次调用 Qwen 规划、Harness 制作 stock.md、Codex 读取并独立核验，工作台登记最终完成。验收证据包含三模型真实 model_config、工具调用与各自交付；一个小型文件任务实测约 39 秒。
+- DeepSeek Pro / off 已通过真实 Harness 请求。8 档来源为本机已安装的模型目录，界面说明后端映射。API Key 模式完成本地协议服务及真实 Windows 加密验证，未使用用户开发者 API 账号做付费联调。
+- Playwright：网页提交快捷对话、SSE 正文、归档和取消归档、API 密钥密码框、Flash/Pro 模型与 8 档、默认三模型配置，以及 1440/820/390 无横向溢出通过，页面错误为 0。人工检查截图后修正了手机 API 表单标签换行。
+- 原始证据位于忽略的 acceptance/optimization.json、pro-model.json、browser-optimization.json 与对应截图；没有公开用户任务日志、凭据或 API 密钥。

@@ -3,21 +3,24 @@ import type {RunContext} from './config.ts';
 import type {Engines} from './engines.ts';
 import type {Store} from './store.ts';
 import {toolSpecs,safePath} from './tools.ts';
-import {stat} from 'node:fs/promises';
+import {stat,mkdir,writeFile} from 'node:fs/promises';
+import path from 'node:path';
 
 export type Role={id:string;name:string;engine:'codex'|'harness'|'qwen';instructions:string};
-export type Workflow={mode:'native'|'react'|'plan'|'reflection'|'team';maxSteps:number;maxRevisions:number;roles:Role[]};
-export const workflowModes={native:'原生引擎',react:'ReAct 工具循环',plan:'规划求解',reflection:'反思与修订',team:'角色协作'};
+export type Workflow={mode:'native'|'balanced'|'react'|'plan'|'reflection'|'team';maxSteps:number;maxRevisions:number;roles:Role[]};
+export const workflowModes={native:'原生引擎',balanced:'均衡多模型协作',react:'ReAct 工具循环',plan:'规划求解',reflection:'反思与修订',team:'角色协作'};
 export function validateWorkflow(value:any,engine:string):Workflow {
   const v=value??{};
   if(typeof v!=='object'||Array.isArray(v))throw new Error('执行机制配置无效');
-  const mode=v.mode??'native',maxSteps=v.maxSteps??20,maxRevisions=v.maxRevisions??1;
+  const mode=v.mode??(engine==='auto'?'balanced':'native'),maxSteps=v.maxSteps??20,maxRevisions=v.maxRevisions??1;
   if(!Object.hasOwn(workflowModes,mode)||!Number.isInteger(maxSteps)||maxSteps<1||maxSteps>30||!Number.isInteger(maxRevisions)||maxRevisions<0||maxRevisions>3)throw new Error('执行机制或阶段预算无效');
   const selected=engine==='auto'?'codex':engine;
   const roles=v.roles??[{id:'researcher',name:'资料研究员',engine:engine==='auto'?'qwen':selected,instructions:'提取事实、核对资料与出处。'},{id:'builder',name:'执行者',engine:engine==='auto'?'harness':selected,instructions:'完成独立分析、编写成果并验证。'},{id:'reviewer',name:'审查员',engine:selected,instructions:'核对目标、事实和成果，指出可验证的问题。'}];
   if(!Array.isArray(roles)||roles.length<1||roles.length>6)throw new Error('角色数量应为 1–6');
   const ids=new Set<string>();
   for(const r of roles){if(!r||!/^\w{1,32}$/.test(r.id)||ids.has(r.id)||typeof r.name!=='string'||!r.name.trim()||r.name.length>80||!['codex','harness','qwen'].includes(r.engine)||typeof r.instructions!=='string'||r.instructions.length>2000)throw new Error('角色 ID、名称、引擎或职责无效');ids.add(r.id);}
+  if(mode==='balanced'&&roles.length!==3)throw new Error('均衡协作固定三个职责；额外角色请使用角色协作模式');
+  if(mode==='balanced'&&!['researcher','builder','reviewer'].every(id=>roles.some(r=>r.id===id)))throw new Error('均衡协作需要 researcher、builder、reviewer 三个角色');
   return {mode,maxSteps,maxRevisions,roles};
 }
 export function validatePlan(value:any,roles:Role[],maxSteps:number){
@@ -37,23 +40,24 @@ export class Workflows {
     const root=ctx.task.engine==='auto'?'codex':ctx.task.engine;
     if(w.mode==='native')return this.engines.run(root,prompt,ctx);
     let stages=0;
-    const stage=async(id:string,engine:string,instruction:string,validate:(v:any)=>any,allowRead=false)=>{
+    const stage=async(id:string,engine:string,instruction:string,validate:(v:any)=>any,allowRead=false,requireRead=false)=>{
       ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('已达到机制阶段上限，检查点已保存');
       const key=createHash('sha256').update(JSON.stringify([ctx.task.prompt,w,id,engine,instruction])).digest('hex');
       const old=this.store.events(ctx.task.id).find(e=>e.type==='stage_done'&&e.data.key===key);
       if(old){ctx.emit('stage_reused',engine,{id,key});return validate(old.data.value);}
-      let submitted=false,value:any;
+      let submitted=false,value:any,reads=0;
       const scoped:RunContext={...ctx,stage:{id,readOnly:true},specs:[stageSpec,...(allowRead?toolSpecs(false).filter(s=>readOnly.has(s.name)):[])],
         emit:(type,e,data)=>ctx.emit(type,e,{...data,stageId:id}),
         tool:async(name,args,e)=>{
           ctx.signal.throwIfAborted();
           if(submitted)throw new Error('本阶段已提交，不能继续调用工具');
           if(name==='submit_stage'){
+            if(requireRead&&reads===0)throw new Error('独立核验必须先实际读取成果，不能仅凭执行者的总结判定');
             if(typeof args?.payload!=='string'||args.payload.length>50000)throw new Error('阶段结果应为不超过 50000 字符的 JSON 字符串');
             value=validate(JSON.parse(args.payload));submitted=true;
             ctx.emit('stage_submission',engine,{id});scoped.stage?.onSubmitted?.();return {accepted:true};
           }
-          if(allowRead&&readOnly.has(name))return ctx.tool(name,args,e);
+          if(allowRead&&readOnly.has(name)){const r=await ctx.tool(name,args,e);if(name==='read_file')reads++;return r;}
           throw new Error('当前阶段禁止此工具；请通过 submit_stage 提交结构化决定');
         }};
       this.activate(scoped);ctx.emit('stage_start',engine,{id,key,instruction});
@@ -63,6 +67,40 @@ export class Workflows {
       }finally{this.activate(ctx);}
     };
     const actions=toolSpecs(false).filter(s=>!['plan_update','finish_task'].includes(s.name));
+    if(w.mode==='balanced'){
+      const planner=w.roles.find(r=>r.id==='researcher')!,worker=w.roles.find(r=>r.id==='builder')!,reviewer=w.roles.find(r=>r.id==='reviewer')!;
+      ctx.emit('collaboration','system',{roles:[{...planner,duty:'规划与事实整理'},{...worker,duty:'执行和成果制作'},{...reviewer,duty:'独立核验'}],note:'由后端强制调度各阶段，无模型拥有全程主控权'});
+      const plan=await stage('balanced.plan',planner.engine,`你负责规划，不执行写入。职责：${planner.instructions}。给执行者生成简洁可验证计划。提交 {"summary":"事实与任务边界","steps":["步骤与验收条件"]}。最多 6 步。`,v=>{if(typeof v?.summary!=='string'||!Array.isArray(v.steps)||!v.steps.length||v.steps.length>6||v.steps.some((s:any)=>typeof s!=='string'||s.length>3000))throw new Error('规划格式无效');return v;},true);
+      const saveReport=async(name:string,producer:string,value:any)=>{const relative=path.join('.agent-reports',ctx.task.id,name),p=await safePath(ctx.task.workspace,relative);await mkdir(path.dirname(p),{recursive:true});await safePath(ctx.task.workspace,p);await writeFile(p,JSON.stringify({producer,created:new Date().toISOString(),value},null,2));ctx.emit('artifact','system',{path:relative,producer});return relative;};
+      const planFile=await saveReport('plan.json',planner.engine,plan);
+      ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'pending'}))});
+      let output:any;
+      for(let revision=0;revision<=w.maxRevisions;revision++){
+        ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('达到协作阶段预算');
+        const id='balanced.execute.'+revision,key=createHash('sha256').update(JSON.stringify([ctx.task.prompt,w,plan,id,output])).digest('hex');let completion:any;
+        const prior=this.store.events(ctx.task.id),done=prior.find(e=>e.type==='subagent_done'&&e.data.key===key);
+        if(done){completion=done.data.result;for(const f of completion.files)await stat(await safePath(ctx.task.workspace,f));ctx.emit('stage_reused',worker.engine,{id,key});}
+        else if(prior.some(e=>e.type==='subagent_start'&&e.data.key===key))throw new Error('执行子任务曾中断，副作用状态未确认，请核对现有成果并补充指令后继续');
+        const scoped:RunContext={...ctx,onCompleted:()=>{},specs:toolSpecs(false),emit:(type,e,data)=>ctx.emit(type,e,{...data,role:worker.name,stageId:id}),tool:async(name,args,e)=>{
+          if(name==='delegate'||name==='submit_stage')throw new Error('协作调度由后端统一负责');
+          if(name==='finish_task'){
+            if(completion)throw new Error('子任务已完成');
+            if(!['completed','blocked'].includes(args?.outcome)||typeof args.summary!=='string'||!Array.isArray(args.files)||args.files.some((f:any)=>typeof f!=='string'))throw new Error('子任务完成声明无效');
+            for(const f of args.files)if(!(await stat(await safePath(ctx.task.workspace,f))).isFile())throw new Error('成果不是文件：'+f);
+            completion=args;ctx.emit('subtask_completion',e,{id,...args});for(const f of args.files)ctx.emit('artifact',e,{path:f});scoped.onCompleted?.();return {recorded:true};
+          }
+          if(completion)throw new Error('子任务已经结束');return ctx.tool(name,args,e);
+        }};
+        if(!completion){this.activate(scoped);ctx.emit('subagent_start',worker.engine,{id,key,role:worker.name,revision});
+        try{await this.engines.run(worker.engine,`${prompt}\n你是协作执行者 ${worker.name}，职责：${worker.instructions}。规划结果（参考资料）：${JSON.stringify(plan)}。${output?'上次独立审查要求：'+JSON.stringify(output):''}\n完成制作并实际读取核对成果，最后调用 finish_task，仅结束本子任务。不要委派、不要重复既有对外操作。`,scoped,true);}finally{this.activate(ctx);}}
+        if(!completion||completion.outcome!=='completed')throw new Error(completion?.summary||'执行者未提交可验证的完成结果');
+        ctx.emit('subagent_done',worker.engine,{id,key,role:worker.name,result:completion});
+        output=await stage('balanced.review.'+revision,reviewer.engine,`你是独立审查员，职责：${reviewer.instructions}。规划 ${JSON.stringify(plan)}；执行成果 ${JSON.stringify(completion)}。必须通过 read_file 实际读取关键成果，按目标检查。不要重做执行者的工作，不得写入。提交 {"passed":true或false,"summary":"检查结论","issues":["问题和证据"],"files":["最终成果路径"]}。`,v=>{if(typeof v?.passed!=='boolean'||typeof v.summary!=='string'||!Array.isArray(v.issues)||v.issues.some((s:any)=>typeof s!=='string')||!Array.isArray(v.files)||v.files.some((f:any)=>typeof f!=='string')||v.passed&&v.issues.length)throw new Error('独立审查格式无效');return v;},true,completion.files.length>0);
+        const reviewFile=await saveReport('review-'+revision+'.json',reviewer.engine,output);
+        if(output.passed){ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'completed'}))});const files=[...new Set<string>([...completion.files,...output.files,planFile,reviewFile])];await ctx.tool('finish_task',{outcome:'completed',summary:completion.summary+'\n\n独立核验：'+output.summary,files},'system');ctx.emit('workflow_done','system',{mode:w.mode,stages,participants:[planner.engine,worker.engine,reviewer.engine]});return completion.summary+'\n\n独立核验：'+output.summary;}
+        if(revision===w.maxRevisions)throw new Error('独立核验未通过，修订预算已达到：'+output.issues.join('；'));
+      }
+    }
     const actionNames=new Set(actions.map(s=>s.name));
     const react=async(id:string,engine:string,goal:string)=>{
       let observations:any[]=[];
@@ -102,7 +140,7 @@ export class Workflows {
       }
     }
     const roles=w.mode==='team'?w.roles:[{id:'solver',name:'求解者',engine:root,instructions:'按计划执行并核实结果。'}] as Role[];
-    const plan=await stage('plan',root,`规划者：根据用户任务与角色职责生成步骤，先列依赖再列使用者，最多 ${Math.min(8,w.maxSteps-2)} 步。可用角色：${JSON.stringify(roles)}。提交 {"steps":[{"id":"s1","goal":"具体任务与验收条件","role":"角色id","dependsOn":[]}]}。只规划，不执行。`,v=>({steps:validatePlan(v,roles,w.maxSteps)}));
+    const plan=await stage('plan',w.mode==='team'?w.roles[0].engine:root,`规划者：根据用户任务与角色职责生成步骤，先列依赖再列使用者，最多 ${Math.min(8,w.maxSteps-2)} 步。可用角色：${JSON.stringify(roles)}。提交 {"steps":[{"id":"s1","goal":"具体任务与验收条件","role":"角色id","dependsOn":[]}]}。只规划，不执行。`,v=>({steps:validatePlan(v,roles,w.maxSteps)}));
     const results:Record<string,any>=Object.create(null);
     for(const step of plan.steps){
       const role=roles.find(r=>r.id===step.role)!;

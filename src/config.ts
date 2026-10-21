@@ -36,12 +36,17 @@ export type Engine = 'auto' | 'codex' | 'harness' | 'qwen';
 export type Status = 'queued' | 'running' | 'waiting' | 'cancelling' | 'cancelled' | 'interrupted' | 'succeeded' | 'failed';
 export interface Task {
   id: string; title: string; prompt: string; engine: Engine; workspace: string; status: Status;
-  created: string; updated: string; result: string; error: string; session: string; options?: string;
+  created: string; updated: string; result: string; error: string; session: string; options?: string; archived?: number;
 }
 export interface EventRecord { id: number; taskId: string; type: string; engine: string; data: any; created: string }
 export interface RunContext {
+  onCompleted?:()=>void;
+  chat?: boolean;
   stage?: {id:string;readOnly:boolean;onSubmitted?:()=>void}; specs?: any[];
   task: Task; signal: AbortSignal; emit: (type: string, engine: string, data: any) => void;
   tool: (name: string, args: any, engine: string) => Promise<any>;
 }
 export function errorText(e: unknown): string { return e instanceof Error ? e.message : String(e); }
+
+// 仅覆盖本应用子进程，保留用户全局 Codex 配置与登录。设 LA_CODEX_TRANSPORT=inherit 可沿用自定义供应商。
+export const codexHttpArgs=process.env.LA_CODEX_TRANSPORT==='inherit'?[]:['-c','model_provider="workbench-http"','-c','model_providers.workbench-http={name="Workbench HTTP",wire_api="responses",requires_openai_auth=true,supports_websockets=false}'];

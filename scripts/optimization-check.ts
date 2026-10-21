@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {writeFile,mkdir} from 'node:fs/promises';
+import {config} from '../src/config.ts';
+const base='http://127.0.0.1:'+(process.env.LA_TEST_PORT||4319),session=await fetch(base+'/api/session'),cookie=session.headers.get('set-cookie')!.split(';')[0];
+async function api(p:string,method='GET',body?:any){const r=await fetch(base+'/api'+p,{method,headers:{cookie,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const d:any=await r.json();assert(r.ok,JSON.stringify(d));return d;}
+const results:any[]=[];
+async function wait(task:any,timeout=180000){const end=Date.now()+timeout;for(;;){const d=await api('/tasks/'+task.id);if(['succeeded','failed','cancelled'].includes(d.task.status))return d;if(Date.now()>end){await api('/tasks/'+task.id+'/cancel','POST',{});throw new Error('测试达到限时 '+task.id);}await new Promise(r=>setTimeout(r,300));}}
+const options={qwen:{model:config.qwenModel,effort:'none'},harness:{model:'deepseek-flash',effort:'off'},codex:{model:'gpt-6.1-sol',effort:'low'}};
+for(const engine of ['auto','harness','codex']){
+ const started=performance.now(),task=await api('/tasks','POST',{engine,prompt:engine==='auto'?'你好':'你是谁',options});const d=await wait(task);assert.equal(d.task.status,'succeeded',d.task.error);assert(!d.events.some((e:any)=>e.type==='retrieval'||e.type==='tool_start'));
+ const r={kind:'chat',engine,actual:d.events.find((e:any)=>e.type==='routing')?.data.engine,totalMs:Math.round(performance.now()-started),firstTokenMs:d.events.find((e:any)=>e.type==='latency'&&e.data.firstTokenMs!==undefined)?.data.firstTokenMs,retries:d.events.filter((e:any)=>e.type==='engine_error').length};results.push(r);console.log(r);await writeFile('acceptance/optimization.json',JSON.stringify(results,null,2));
+ await api('/tasks/'+task.id+'/archive','POST',{archived:true});assert(!(await api('/tasks')).some((t:any)=>t.id===task.id));assert((await api('/tasks?archived=1')).some((t:any)=>t.id===task.id));await api('/tasks/'+task.id+'/archive','POST',{archived:false});
+}
+const task=await api('/tasks','POST',{engine:'auto',intent:'task',options,prompt:'计算 12*8-19，生成 stock.md，写明算式与结果 77。请规划、制作并独立核验成果。只需要一个 Markdown 文件，不运行命令、不访问网络。'});console.log('协作任务',task.id);const d=await wait(task,300000);assert.equal(d.task.status,'succeeded',d.task.error);
+const engines=[...new Set(d.events.filter((e:any)=>e.type==='engine_done').map((e:any)=>e.engine))];assert.deepEqual(engines.sort(),['codex','harness','qwen']);const writes=d.events.filter((e:any)=>e.type==='tool_start'&&e.data.name==='write_file');assert(writes.some((e:any)=>e.engine==='harness'));assert(d.events.some((e:any)=>e.type==='tool_start'&&e.engine==='codex'&&e.data.name==='read_file'));assert(d.events.some((e:any)=>e.type==='workflow_done'&&e.data.mode==='balanced'));
+results.push({kind:'balanced',taskId:task.id,engines,modelConfigs:d.events.filter((e:any)=>e.type==='model_config').map((e:any)=>({engine:e.engine,...e.data})),tools:d.events.filter((e:any)=>e.type==='tool_start').map((e:any)=>({engine:e.engine,name:e.data.name})),retries:d.events.filter((e:any)=>e.type==='engine_error').length});await mkdir('acceptance',{recursive:true});await writeFile('acceptance/optimization.json',JSON.stringify(results,null,2));console.log('真实三模型均衡协作、归档与快捷对话验收通过');

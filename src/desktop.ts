@@ -1,12 +1,14 @@
-import { config } from './config.ts';
+import { config,codexHttpArgs } from './config.ts';
 import type { RunContext } from './config.ts';
 import { Rpc } from './rpc.ts';
+export const codexTransportArgs=codexHttpArgs;
 
-export function codexEnv(){const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('CODEX_')&&!['CODEX_HOME','CODEX_API_KEY'].includes(k))delete env[k];return env;}
+export function codexEnv(){const env={...process.env};for(const k of Object.keys(env))if(k==='LA_DEEPSEEK_API_KEY'||k.startsWith('CODEX_')&&!['CODEX_HOME','CODEX_API_KEY'].includes(k))delete env[k];return env;}
 export class Desktop {
   snapshot:any={checkedAt:null,apps:[],servers:[],models:[],currentModel:'',currentEffort:'',error:''};
-  pending?:Promise<any>;
-  async connect(){const r=new Rpc(config.codex,['app-server','-c','features.apps=true'],{cwd:config.root,env:codexEnv()});try{await r.request('initialize',{clientInfo:{name:'local_agent_desktop_bridge',version:'0.2.0'},capabilities:{experimentalApi:true}},20000);r.notify('initialized');return r;}catch(e){await r.close();throw e;}}
+  pending?:Promise<any>; modelSnapshot:any; modelPending?:Promise<any>;
+  async models(){if(this.modelSnapshot&&Date.now()-this.modelSnapshot.at<300000)return this.modelSnapshot;if(this.modelPending)return this.modelPending;this.modelPending=(async()=>{let rpc:Rpc|undefined;try{rpc=new Rpc(config.codex,['app-server',...codexTransportArgs,'-c','features.apps=false'],{cwd:config.root,env:codexEnv()});await rpc.request('initialize',{clientInfo:{name:'workbench_model_catalog',version:'0.4.0'}},10000);rpc.notify('initialized');const [models,current]=await Promise.all([rpc.request('model/list',{limit:100},10000),rpc.request('config/read',{includeLayers:false},10000)]);return this.modelSnapshot={at:Date.now(),models:(models.data||[]).map((m:any)=>({id:m.model,name:m.displayName,defaultEffort:m.defaultReasoningEffort,efforts:m.supportedReasoningEfforts.map((e:any)=>e.reasoningEffort),isDefault:m.isDefault})),currentModel:current.config?.model||'',currentEffort:current.config?.model_reasoning_effort||'',error:''};}catch(e:any){return {models:[],currentModel:'',currentEffort:'',error:e.message};}finally{await rpc?.close();}})().finally(()=>this.modelPending=undefined);return this.modelPending;}
+  async connect(){const r=new Rpc(config.codex,['app-server',...codexTransportArgs,'-c','features.apps=true'],{cwd:config.root,env:codexEnv()});try{await r.request('initialize',{clientInfo:{name:'local_agent_desktop_bridge',version:'0.2.0'},capabilities:{experimentalApi:true}},20000);r.notify('initialized');return r;}catch(e){await r.close();throw e;}}
   async status(refresh=false){
     if(!refresh&&this.snapshot.checkedAt&&Date.now()-Date.parse(this.snapshot.checkedAt)<300000)return this.snapshot;
     if(this.pending)return this.pending;

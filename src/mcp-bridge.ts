@@ -5,7 +5,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data',chunk=>{buffer+=chunk;for(;;){const i=buffer.indexOf('\n');if(i<0)break;const line=buffer.slice(0,i);buffer=buffer.slice(i+1);void handle(line);}});
 async function handle(line:string){let m:any;try{m=JSON.parse(line);}catch{return;}if(m.id===undefined)return;
   try{let result:any;
-    if(m.method==='initialize')result={protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'local-agent-workbench',version:'0.1.0'}};
+    if(m.method==='initialize')result={protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'local-agent-workbench',version:'0.4.0'}};
     else if(m.method==='tools/list'){const specs:any=await api('tools',{});result={tools:specs.map((s:any)=>({name:s.name,description:s.description,inputSchema:s.parameters,annotations:{readOnlyHint:['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','desktop_search','fetch_url'].includes(s.name),destructiveHint:false,idempotentHint:!['run_command','desktop_call'].includes(s.name),openWorldHint:s.name==='fetch_url'}}))};}
     else if(m.method==='tools/call'){try{const data=await api('call',{name:m.params.name,args:m.params.arguments||{},engine:'codex'});result={content:[{type:'text',text:JSON.stringify(data)}]};}catch(e:any){result={isError:true,content:[{type:'text',text:e.message}]};}}
     else if(m.method==='ping')result={};else throw new Error('不支持 '+m.method);

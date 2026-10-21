@@ -23,7 +23,7 @@ test('向量维度不混用，分块保留重叠且不会截断 Unicode',()=>{
  const input='猫😀'.repeat(1000),parts=chunks(input);assert(parts.length>1);assert(!parts.some(p=>p.includes('\uFFFD')));assert(parts[0].endsWith(Array.from(parts[1]).slice(0,120).join('')));
 });
 test('模型配置拒绝虚构强度，自动模式保留三个独立执行器配置',async()=>{
- const desktop=new Desktop();desktop.status=async()=>({models:[{id:'real-model',efforts:['low','high'],isDefault:true}],error:''});
+ const desktop=new Desktop();desktop.models=async()=>({models:[{id:'real-model',efforts:['low','high'],isDefault:true}],error:''});
  const p=await validateProfiles({codex:{effort:'high'},harness:{effort:'off'},qwen:{effort:'none'}},desktop);assert.equal(p.codex.model,'real-model');assert.equal(p.qwen.effort,'none');
  await assert.rejects(validateProfiles({codex:{model:'fake'}},desktop),/不可用/);await assert.rejects(validateProfiles({qwen:{effort:'xhigh'}},desktop),/不支持/);
 });

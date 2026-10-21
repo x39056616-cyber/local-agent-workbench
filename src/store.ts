@@ -20,6 +20,7 @@ export class Store {
       CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT);
     `);
     if(!(this.db.prepare('PRAGMA table_info(tasks)').all() as any[]).some(c=>c.name==='options'))this.db.exec("ALTER TABLE tasks ADD COLUMN options TEXT NOT NULL DEFAULT '{}'");
+    if(!(this.db.prepare('PRAGMA table_info(tasks)').all() as any[]).some(c=>c.name==='archived'))this.db.exec('ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0');
     const stale = this.list().filter(t => ['running','waiting','cancelling'].includes(t.status));
     for (const t of stale) { this.update(t.id, { status: 'interrupted', error: '应用上次退出时任务尚未完成，请检查成果后继续。' }); this.event(t.id,'status','system',{status:'interrupted'}); }
   }
@@ -31,11 +32,12 @@ export class Store {
   get(id: string): Task | undefined { return this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as unknown as Task | undefined; }
   list(): Task[] { return this.db.prepare('SELECT * FROM tasks ORDER BY created DESC LIMIT 200').all() as unknown as Task[]; }
   update(id: string, patch: Partial<Task>) {
-    const allowed = ['prompt','status','result','error','session','options'];
+    const allowed = ['prompt','status','result','error','session','options','archived'];
     const keys = Object.keys(patch).filter(k => allowed.includes(k));
     if (!keys.length) return;
     this.db.prepare(`UPDATE tasks SET ${keys.map(k => k+'=?').join(',')},updated=? WHERE id=?`).run(...keys.map(k => String(patch[k as keyof Task] ?? '')),new Date().toISOString(),id);
   }
+  archive(id:string,archived:boolean){const t=this.get(id);if(!t)throw new Error('任务不存在');if(['queued','running','waiting','cancelling'].includes(t.status))throw new Error('请先停止任务后再归档');this.update(id,{archived:archived?1:0});}
   event(taskId: string, type: string, engine: string, data: any): EventRecord {
     const created = new Date().toISOString();
     const r = this.db.prepare('INSERT INTO events(taskId,type,engine,data,created) VALUES(?,?,?,?,?)').run(taskId,type,engine,JSON.stringify(data),created);

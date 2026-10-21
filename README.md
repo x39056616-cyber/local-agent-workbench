@@ -1,6 +1,6 @@
 # 本地 Agent 工作台
 
-把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen，查看计划、工具执行、结果检查与生成文件。自动模式由 Codex 按需委派，其他模式也能独立调用工具。v0.2 新增本地向量检索、桌面连接器桥、模型与强度选择、GitHub Pages 配对网页。
+把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen，查看计划、工具执行、结果检查与生成文件。v0.4 默认由后端协调 Qwen 规划、DeepSeek 执行、Codex 独立核验；问候走无工具快捷对话。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md)。
 
 发布网页：[GitHub Pages](https://x39056616-cyber.github.io/local-agent-workbench/)；源码：[local-agent-workbench](https://github.com/x39056616-cyber/local-agent-workbench)。部署与配对步骤见 [DEPLOY.md](DEPLOY.md)。
 
@@ -22,7 +22,7 @@
 - 如果模型应用已打开而 API 未开启，双击 **连接本地Qwen.cmd**。该脚本操作 Bionic 的正常“本地模型API”开关，不读取或迁移认证密钥。当前适配 Bionic 1.1.8 的中文界面。
 - “模型已打开”不等于 API 已开启。Bionic 的应用数据在 `~/.lmstudio/apps/bionic/`，旧版 `lms` 可能错误寻找另一实例；本项目此次已通过正常界面恢复 API 服务。
 
-Codex 和 Harness 沿用各自已有账号。登录失效时在原应用登录，不要在聊天、代码或网页里粘贴密钥。
+Codex 和 Harness 可沿用各自已有账号。DeepSeek 也可在本机「运行设置 → DeepSeek 接入」配置开发者 API Key，使用 Windows 当前用户加密保存。登录失效时在原应用登录；密钥无需发到聊天中。
 
 ## 与参考思维导图的对应
 
@@ -72,7 +72,7 @@ Codex 和 Harness 沿用各自已有账号。登录失效时在原应用登录�
 任务输入区可选当前执行器的模型和强度；运行设置可分别配置三个执行者并保存默认值。自动模式的子任务使用各自配置，任务保存提交时配置快照。新任务默认沿用现有设置，不覆盖全局配置。不支持的模型或强度会报错，不静默切换。
 
 - Codex：从真实 `model/list` 获取可选模型与支持的强度，通过 `thread/start.model` 和 `turn/start.effort` 生效。
-- Harness：沿用 `deepseek-account / deepseek-flash`，通过本机 SDK 的 `initialize.reasoningEffort` 选择 `off / low / high / max`。
+- DeepSeek：桌面账号支持 Flash / Pro 和本机完整的 8 档强度；也可配置 API Key。后端存在档位映射，见 [OPTIMIZATION.md](OPTIMIZATION.md)。
 - Qwen：当前服务实测 `reasoning_effort:none` 关闭思考，`low` 开启思考；界面分别标为“关闭思考/开启思考”。尚未确认多个深度档位生效，因此不提供虚构的高/中/低。开启沿用现有预算与上下文。
 
 ## 当前边界
@@ -110,7 +110,7 @@ node scripts/pages-check.ts
 
 ## 配置
 
-后端直接用 Node.js 24 运行 TypeScript，React 网页由 Vite 构建。SQLite 使用 Node 自带模块。可在启动前设置 `LA_PORT`、`LA_DATA_DIR`、`LA_CODEX_BIN`、`LA_HARNESS_EXE`、`LA_HARNESS_CLI`、`LA_QWEN_URL`、`LA_QWEN_MODEL`、`LA_EMBEDDING_MODEL`、`LA_PUBLISHED_URL`、`LA_WEB_PROXY`；不需要修改原有软件的全局配置。默认端口 4317。
+后端直接用 Node.js 24 运行 TypeScript，React 网页由 Vite 构建。SQLite 使用 Node 自带模块。可在启动前设置 `LA_PORT`、`LA_DATA_DIR`、`LA_CODEX_BIN`、`LA_HARNESS_EXE`、`LA_HARNESS_CLI`、`LA_QWEN_URL`、`LA_QWEN_MODEL`、`LA_EMBEDDING_MODEL`、`LA_PUBLISHED_URL`、`LA_WEB_PROXY`、`LA_DEEPSEEK_API_KEY`、`LA_CODEX_TRANSPORT`；不需要修改原有软件的全局配置。默认端口 4317。
 
 核心文件：`src/agent.ts` 管理生命周期；`src/engines.ts` 管理三引擎；`src/tools.ts` 管理共享工具与边界；`src/store.ts` 持久化；`src/server.ts` 提供网页 API。
 
@@ -131,3 +131,7 @@ React、Vite、TypeScript、Undici 与其他依赖的许可证保留在对应 np
 ## 执行机制与基准评估（0.3）
 
 任务输入区可选 ReAct、规划求解、反思、角色协作，工作台自身负责状态迁移与工具反馈。侧栏「基准评估」可导入本地练习题、查看预测和下载报告。范围、成本、官方评估依赖与教程对应见 [MECHANISMS.md](MECHANISMS.md)。
+
+## 快捷对话、均衡协作、API 与归档（0.4）
+
+新任务默认均衡协作，分别交付规划记录、实际文件、独立核验记录。任务输入区可切换快捷对话或工具任务；侧栏可管理归档；运行设置支持 DeepSeek 桌面账号与开发者 API。使用、延迟实测和验证边界见 [OPTIMIZATION.md](OPTIMIZATION.md)。

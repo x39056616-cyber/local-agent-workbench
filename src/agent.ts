@@ -9,9 +9,11 @@ import { Tools, toolSpecs, safePath } from './tools.ts';
 import { Engines } from './engines.ts';
 import {Workflows,validateWorkflow} from './workflows.ts';
 import {runBfcl} from './evaluation.ts';
+import {taskRoute} from './routing.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
+  chats=new Map<string,AbortController>();
   approvals=new Map<string,{resolve:(answer:boolean)=>void;taskId:string}>();
   constructor(store:Store,token:string){
     super();this.store=store;this.tools=new Tools(store);this.engines=new Engines(token,toolSpecs);
@@ -19,10 +21,18 @@ export class Agent extends EventEmitter {
     this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
   }
   emitEvent(taskId:string,type:string,engine:string,data:any){const e=this.store.event(taskId,type,engine,data);this.emit('event',e);}
-  async enqueue(task:Task){this.emitEvent(task.id,'status','system',{status:'queued'});void this.pump();}
+  async enqueue(task:Task){this.emitEvent(task.id,'status','system',{status:'queued'});if(taskRoute(task).kind==='chat')void this.runChat(task);else void this.pump();}
+  async runChat(task:Task){
+    if(this.chats.has(task.id))return;const controller=new AbortController();this.chats.set(task.id,controller);const route=taskRoute(task),start=performance.now();
+    const ctx:RunContext={task,chat:true,specs:[],signal:controller.signal,emit:(type,e,data)=>this.emitEvent(task.id,type,e,data),tool:async()=>{throw new Error('快捷对话不允许工具执行');}};
+    const timer=setTimeout(()=>controller.abort(new Error('快捷对话超时，请检查模型连接或关闭思考')),90000);
+    try{this.store.update(task.id,{status:'running',error:''});ctx.emit('status','system',{status:'running'});ctx.emit('routing','system',route);await fs.mkdir(task.workspace,{recursive:true});const result=await this.engines.chat(route.engine,task.prompt,ctx);controller.signal.throwIfAborted();await fs.writeFile(path.join(task.workspace,'agent-result.md'),result);ctx.emit('artifact','system',{path:'agent-result.md'});ctx.emit('latency','system',{totalMs:Math.round(performance.now()-start)});this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded'});}
+    catch(e){const status=controller.signal.aborted?'cancelled':'failed',error=errorText(controller.signal.aborted?controller.signal.reason:e);this.store.update(task.id,{status,error});ctx.emit('status','system',{status,error});}
+    finally{clearTimeout(timer);this.chats.delete(task.id);}
+  }
   async pump(){
     if(this.active)return;
-    const task=this.store.list().reverse().find(t=>t.status==='queued');if(!task)return;
+    const task=this.store.list().reverse().find(t=>t.status==='queued'&&!t.archived&&taskRoute(t).kind!=='chat');if(!task)return;
     const controller=new AbortController();
     const ctx:RunContext={task,signal:controller.signal,emit:(type,engine,data)=>this.emitEvent(task.id,type,engine,data),tool:(name,args,engine)=>this.tools.call(ctx,name,args,engine)};
     this.active={id:task.id,controller,ctx};
@@ -39,10 +49,10 @@ export class Agent extends EventEmitter {
       const prompt=`任务工作目录：${task.workspace}\n用户任务：${task.prompt}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；成果必须写入工作目录并读取核对。`;
       const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
       ctx.emit('workflow_start','system',workflow);
-      const result=evaluation?.kind==='bfcl'?await runBfcl(ctx,evaluation):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt,ctx,workflow);
+      const result=evaluation?.kind==='bfcl'?await this.engines.serialQwen(()=>runBfcl(ctx,evaluation),ctx):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt,ctx,workflow);
       controller.signal.throwIfAborted();
       const currentEvents=this.store.events(task.id,startEvent);
-      const rootEngine=task.engine==='auto'?'codex':task.engine;
+      const rootEngine=evaluation?.kind==='bfcl'?'qwen':workflow.mode==='balanced'?'system':task.engine==='auto'?'codex':task.engine;
       const completion=currentEvents.filter(e=>e.type==='completion'&&e.engine===rootEngine).at(-1);
       if(!completion){this.store.update(task.id,{result});throw new Error('执行器已结束，但未通过 finish_task 提交可验证的完成声明。请检查回答后继续。');}
       if(completion.data.outcome!=='completed'){this.store.update(task.id,{result});throw new Error(completion.data.summary||'执行器报告任务尚未完成');}
@@ -59,7 +69,8 @@ export class Agent extends EventEmitter {
     finally{clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }
   cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');
-    if(this.active?.id===id){this.store.update(id,{status:'cancelling'});this.emitEvent(id,'status','system',{status:'cancelling'});this.active.controller.abort(new Error('用户停止了任务'));}
+    if(this.chats.has(id)){this.chats.get(id)!.abort(new Error('用户停止了对话'));}
+    else if(this.active?.id===id){this.store.update(id,{status:'cancelling'});this.emitEvent(id,'status','system',{status:'cancelling'});this.active.controller.abort(new Error('用户停止了任务'));}
     else if(task.status==='queued'){this.store.update(id,{status:'cancelled'});this.emitEvent(id,'status','system',{status:'cancelled'});}
   }
   async approve(ctx:RunContext,action:string,detail:any):Promise<boolean>{
