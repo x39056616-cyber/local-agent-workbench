@@ -41,7 +41,8 @@ try{
   if(-not $apiReady){
     $modelWindow=Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -in @('Bionic','LM Studio') -and $_.MainWindowHandle -ne 0 } | Select-Object -First 1
     if(-not $modelWindow){
-      $candidates=@($env:LA_QWEN_APP,(Join-Path $env:ProgramFiles 'Bionic\Bionic.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\LM Studio\LM Studio.exe')) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+      $candidatePaths=if($env:LA_QWEN_APP){@($env:LA_QWEN_APP)}else{@((Join-Path $env:ProgramFiles 'Bionic\Bionic.exe'),(Join-Path $env:LOCALAPPDATA 'Programs\LM Studio\LM Studio.exe'))}
+      $candidates=@($candidatePaths | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
       if(-not $candidates){throw 'Bionic / LM Studio was not found. Set LA_QWEN_APP to the installed application.'}
       Start-Process -FilePath $candidates[0] -WindowStyle Hidden | Out-Null
       for($i=0;$i -lt 45;$i++){
