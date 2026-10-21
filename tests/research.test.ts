@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
@@ -25,6 +25,9 @@ test('搜索标题、空结果、工具目录不能冒充已读取资料；伪�
  ledger.require(['web'],[{ref:'https://example.com/paper',quote:'事实证据和完整说明'}]);
  assert.throws(()=>ledger.require(['web'],[{ref:'https://fake.example/',quote:'不存在的证据'}]),/没有实际工具记录/);
  assert.throws(()=>ledger.require(['web'],[{ref:'https://example.com/paper',quote:'编造出来的其他结论'}]),/实际读取的原文/);
+});
+test('网页查看器的行号和排版不会使真实跨行摘录被误判为伪造',()=>{
+ const ledger=new EvidenceLedger(process.cwd());ledger.record('web_read',{}, {url:'https://example.com/',text:'L12: reasoning and acting\nL13: in language models'});ledger.require(['web'],[{ref:'https://example.com/',quote:'reasoning and acting in language models'}]);assert.throws(()=>ledger.require(['web'],[{ref:'https://example.com/',quote:'不存在的虚构文字'}]),/实际读取的原文/);
 });
 test('用户明确需要文件时，文字完成声明与内部计划不能替代文件交付',async()=>fixture(async(s,t,c)=>{
  for(const prompt of ['生成 result.md 文件','导出 PDF','修改 test.py 文件'])assert(requiresFileDelivery(prompt));
@@ -80,6 +83,21 @@ test('研究连接器写入与未知权限在发出调用前被拒绝，搜索�
 });
 test('已取消的搜索或连接器请求不能启动发现与执行进程',async()=>{
  const d=new Desktop(),controller=new AbortController();let inspected=false;controller.abort(new Error('已取消'));d.status=async()=>{inspected=true;throw new Error('不应发现');};const ctx:any={signal:controller.signal};await assert.rejects(d.web(ctx,{query:'test'}),/已取消/);await assert.rejects(d.call(ctx,'s','t',{},async()=>true),/已取消/);await assert.rejects(d.connect(controller.signal),/已取消/);assert.equal(inspected,false);
+});
+test('搜索正文有界返回，长网页保留按行继续阅读入口',async()=>{
+ const d=new Desktop(),ctx:any={signal:new AbortController().signal};d.status=async()=>({error:'',servers:[{name:'codex_apps',tools:[{name:'search_service.web_run',readOnly:true,inputSchema:{properties:{search_query:{},open:{}}}}]}]});let args:any;
+ d.call=async(_c,_s,_t,a)=>{args=a;return {content:[{type:'text',text:'原始内容'.repeat(6000)}]} as any;};const search=await d.web(ctx,{query:'test'});assert.equal(search.text.length,8000);assert(search.truncated);assert.equal(args.response_length,'short');const read=await d.web(ctx,{url:'https://example.com/',line:120});assert.equal(read.text.length,16000);assert(read.truncated);assert.equal(args.open[0].lineno,120);assert.equal(args.response_length,'medium');
+ const ledger=new EvidenceLedger(process.cwd());ledger.record('web_read',{}, {url:'https://example.com/',text:'第一页的原始资料'});ledger.record('web_read',{}, {url:'https://example.com/',text:'后续页面的原始资料'});ledger.require(['web'],[{ref:'https://example.com/',quote:'第一页的原始资料'}]);
+});
+test('用户明确禁止命令时，在审批或启动进程前拒绝',async()=>fixture(async(_s,t,c)=>{
+ c.task.prompt='请查资料，不要运行命令';let approved=false;t.approval=async()=>{approved=true;return true;};await assert.rejects(t.call(c,'run_command',{command:['echo','test']},'harness'),/用户明确禁止/);assert.equal(approved,false);
+}));
+test('Markdown 结构换行重复转义时不写入文件，代码中的字面转义保持原样',async()=>fixture(async(_s,t,c)=>{
+ await assert.rejects(t.call(c,'write_file',{path:'report.md',content:'# 报告\\n\\n- 内容'},'harness'),/真实换行字符/);await assert.rejects(readFile(path.join(c.task.workspace,'report.md')));const content='# 报告\n\n- 内容';await t.call(c,'write_file',{path:'report.md',content},'harness');assert.equal(await readFile(path.join(c.task.workspace,'report.md'),'utf8'),content);const code='print("\\n")';await t.call(c,'write_file',{path:'demo.py',content:code},'harness');assert.equal(await readFile(path.join(c.task.workspace,'demo.py'),'utf8'),code);
+}));
+test('Qwen 原生任务提交有效 finish_task 后不再多请求一轮模型',async()=>{
+ let count=0;const server=http.createServer(async(req,res)=>{for await(const _ of req){}count++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{role:'assistant',content:null,tool_calls:[{id:'finish',type:'function',function:{name:'finish_task',arguments:JSON.stringify({outcome:'completed',summary:'最终答案',files:[]})}}]}}]}));});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const original=config.qwenBase;config.qwenBase='http://127.0.0.1:'+(server.address() as any).port;
+ try{await new Engines('',()=>[]).qwen('测试',{task:{options:'{}'},signal:AbortSignal.timeout(5000),emit:()=>{},tool:async()=>({recorded:true})} as any);assert.equal(count,1);}finally{config.qwenBase=original;server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));}
 });
 test('Qwen 阶段只输出计划时仅提醒一次，随后必须使用实际工具协议',async()=>{
  let count=0;const server=http.createServer(async(req,res)=>{for await(const _ of req){}count++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:count===1?{role:'assistant',content:'我会先规划再查资料。'}:{role:'assistant',content:null,tool_calls:[{id:'submit',type:'function',function:{name:'submit_stage',arguments:JSON.stringify({payload:'{}'})}}]}}]}));});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const original=config.qwenBase;config.qwenBase='http://127.0.0.1:'+(server.address() as any).port;

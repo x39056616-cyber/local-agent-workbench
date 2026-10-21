@@ -2,13 +2,14 @@ import path from 'node:path';
 import {researchKinds} from './routing.ts';
 
 export type Evidence={ref:string;kind:'web'|'local';text:string;tool:string};
+const sourceText=(text:string)=>text.normalize('NFKC').replace(/(^|\n)\s*L\d+:\s?/g,'$1').replace(/【[^】]+】/g,'').replace(/\s+/g,' ').trim();
 export class EvidenceLedger {
  sources=new Map<string,Evidence>();
  workspace:string;
  constructor(workspace:string){this.workspace=workspace;}
  record(name:string,args:any,result:any){
   if(result?.error)return;
-  const add=(ref:string,kind:'web'|'local',text:any)=>{if(typeof text==='string'&&text.trim())this.sources.set(kind+':'+ref,{ref,kind,text:text.slice(0,30000),tool:name});};
+  const add=(ref:string,kind:'web'|'local',text:any)=>{if(typeof text==='string'&&text.trim()){const key=kind+':'+ref,previous=this.sources.get(key)?.text;this.sources.set(key,{ref,kind,text:(previous&&previous!==text?previous+'\n'+text:text).slice(0,60000),tool:name});}};
   if(['fetch_url','web_read'].includes(name)&&typeof result?.url==='string')add(result.url,'web',result.text);
   if(name==='read_file'&&typeof result?.path==='string')add(path.relative(this.workspace,path.resolve(this.workspace,result.path)).replaceAll('\\','/'),'local',result.total===0?'[已实际读取：文件为空]':result.text);
   if(name==='search_files')for(const h of result?.hits||[])if(typeof h.path==='string')add(h.path.replaceAll('\\','/'),'local',h.snippet);
@@ -23,7 +24,7 @@ export class EvidenceLedger {
   for(const kind of kinds)if(![...this.sources.values()].some(s=>s.kind===kind))throw new Error((kind==='web'?'联网研究':'本地资料研究')+'尚无实际读取的非空来源。请先读取资料；仅搜索标题、列计划或返回空结果不能算完成。');
   if(claimed!==undefined){
    if(!Array.isArray(claimed)||claimed.length>12)throw new Error('sources 应为最多 12 项的来源数组');
-   for(const c of claimed){const actual=[...this.sources.values()].find(s=>s.ref===c?.ref);if(!actual)throw new Error('来源没有实际工具记录：'+String(c?.ref));if(typeof c.quote!=='string'||c.quote.length<4||c.quote.length>600||!actual.text.replace(/\s+/g,' ').includes(c.quote.replace(/\s+/g,' ')))throw new Error('来源摘录必须取自本阶段实际读取的原文：'+c.ref);}
+   for(const c of claimed){const actual=[...this.sources.values()].find(s=>s.ref===c?.ref);if(!actual)throw new Error('来源没有实际工具记录：'+String(c?.ref));if(typeof c.quote!=='string'||c.quote.length<4||c.quote.length>600||!sourceText(actual.text).includes(sourceText(c.quote)))throw new Error('来源摘录必须取自本阶段实际读取的原文：'+c.ref);}
   }
  }
  publicSources(){return [...this.sources.values()].slice(0,12).map(s=>({ref:s.ref,kind:s.kind,tool:s.tool,excerpt:s.text.slice(0,600)}));}

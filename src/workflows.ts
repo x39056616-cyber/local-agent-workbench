@@ -57,11 +57,13 @@ export class Workflows {
           ctx.signal.throwIfAborted();
           if(submitted)throw new Error('本阶段已提交，不能继续调用工具');
           if(name==='submit_stage'){
+           try{
             if(typeof args?.payload!=='string'||args.payload.length>50000)throw new Error('阶段结果应为不超过 50000 字符的 JSON 字符串');
             const candidate=JSON.parse(args.payload);
             if(candidate?.passed!==false&&(requireRead===true&&reads===0||expected.some(f=>!readPaths.has(f.path))))throw new Error('独立核验必须先实际读取全部声明成果，读取无关文件或只看总结不能判定通过');
             value=validate(candidate,ledger);submitted=true;
             ctx.emit('stage_submission',engine,{id});scoped.stage?.onSubmitted?.();return {accepted:true};
+           }catch(error){ctx.emit('stage_rejected',engine,{id,error:error instanceof Error?error.message:'阶段提交无效'});throw error;}
           }
           if(allowRead&&readOnly.has(name)){const r=await ctx.tool(name,args,e);ledger.record(name,args,r);if(name==='read_file'&&(r?.total===0||typeof r?.text==='string'&&r.text.length)){reads++;if(r?.path)readPaths.add(path.resolve(ctx.task.workspace,r.path));}return r;}
           throw new Error('当前阶段禁止此工具；请通过 submit_stage 提交结构化决定');
@@ -77,7 +79,7 @@ export class Workflows {
       const planner=w.roles.find(r=>r.id==='researcher')!,worker=w.roles.find(r=>r.id==='builder')!,reviewer=w.roles.find(r=>r.id==='reviewer')!;
       const requirements=researchKinds(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);
       ctx.emit('collaboration','system',{roles:[{...planner,duty:'资料研究与规划'},{...worker,duty:'执行和成果制作'},{...reviewer,duty:'独立核验'}],note:'由后端强制调度各阶段，无模型拥有全程主控权'});
-      const plan=await stage('balanced.plan',planner.engine,`你负责实际资料研究和规划，不执行写入。职责：${planner.instructions}。${requirements.length?'本任务必须实际查阅 '+requirements.join('、')+' 来源。联网先用 web_search，再用 web_read 打开相关原始网页；本地资料用 read_file、knowledge_search 或 desktop_read。不要只列计划，不要凭模型记忆声称查过资料。':'本任务自包含，可直接提取已给事实，不需要额外联网。'}\n把查到的事实和来源交给执行者。提交 {"summary":"已查到的事实与任务边界","sources":[{"ref":"实际工具返回的完整URL、文件相对路径或knowledge来源","quote":"该来源的简短原文摘录"}],"steps":["步骤与验收条件"]}。sources 可省略，由后端附上真实工具证据；提供的来源和摘录必须可核对。最多 6 步。检索失败时继续尝试相关只读工具；无法取得资料请明确说明阻碍，不能假报完成。`,(v,ledger)=>{if(typeof v?.summary!=='string'||!Array.isArray(v.steps)||!v.steps.length||v.steps.length>6||v.steps.some((s:any)=>typeof s!=='string'||s.length>3000))throw new Error('研究结果格式无效');ledger.require(requirements,v.sources);const sources=ledger.publicSources();ctx.emit('research_evidence',planner.engine,{sources,required:requirements});return {...v,sources};},true);
+      const plan=await stage('balanced.plan',planner.engine,`你负责实际资料研究和规划，不执行写入。职责：${planner.instructions}。${requirements.length?'本任务必须实际查阅 '+requirements.join('、')+' 来源。联网先用 web_search，再用 web_read 打开相关原始网页；本地资料用 read_file、knowledge_search 或 desktop_read。不要只列计划，不要凭模型记忆声称查过资料。':'本任务自包含，可直接提取已给事实，不需要额外联网。'}\n把查到的关键事实交给执行者。只提交 {"summary":"简短的已知事实与任务边界","steps":["简短步骤与验收条件"]}。来源已由后端从真实工具记录自动登记，不要在 payload 中手写 sources 或复制长篇原文。简单核对任务最多 2 步，复杂任务最多 6 步。检索失败时继续尝试相关只读工具；无法取得资料请明确说明阻碍，不能假报完成。`,(v,ledger)=>{if(typeof v?.summary!=='string'||!Array.isArray(v.steps)||!v.steps.length||v.steps.length>6||v.steps.some((s:any)=>typeof s!=='string'||s.length>3000))throw new Error('研究结果格式无效');ledger.require(requirements,v.sources);const sources=ledger.publicSources();ctx.emit('research_evidence',planner.engine,{sources,required:requirements});return {...v,sources};},true);
       const saveReport=async(name:string,producer:string,value:any)=>{const relative=path.join('.agent-reports',ctx.task.id,name),p=await safePath(ctx.task.workspace,relative);await mkdir(path.dirname(p),{recursive:true});await safePath(ctx.task.workspace,p);await writeFile(p,JSON.stringify({producer,created:new Date().toISOString(),value},null,2));ctx.emit('artifact','system',{path:relative,producer});return relative;};
       const planFile=await saveReport('plan.json',planner.engine,plan);
       ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'pending'}))});
