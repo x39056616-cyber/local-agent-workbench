@@ -6,7 +6,7 @@ try{
  const page=await browser.newPage({viewport:{width:1440,height:1100}});page.on('pageerror',e=>errors.push(e.message));
  await page.goto('http://127.0.0.1:'+(process.env.LA_TEST_PORT||4319));
  await page.getByText('本机服务已连接',{exact:true}).waitFor({timeout:30000});
- await page.locator('.workflow-editor summary').click();await page.getByLabel('执行机制',{exact:true}).selectOption('team');
+ await page.locator('.task-options>summary').click();await page.locator('.workflow-editor summary').click();await page.getByLabel('执行机制',{exact:true}).selectOption('team');
  await page.getByLabel('角色名称 researcher').fill('资料核验员');await page.getByLabel('角色引擎 researcher').selectOption('qwen');
  await page.screenshot({path:'acceptance/mechanisms-roles.png',fullPage:true});
  await page.getByRole('button',{name:'基准评估'}).click();await page.getByLabel('评估方法').selectOption('bfcl');

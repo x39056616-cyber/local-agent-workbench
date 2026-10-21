@@ -11,6 +11,7 @@ import { modelCatalog, validateProfiles } from './profiles.ts';
 import {validateWorkflow} from './workflows.ts';
 import {Evaluation,evaluationExamples} from './evaluation.ts';
 import {isGreeting} from './routing.ts';
+import {startQwen,qwenStatus} from './runtime.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -22,7 +23,7 @@ await agent.tools.inventory();
 const equal=(a:string,b:string)=>a.length===b.length&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
 function json(res:http.ServerResponse,status:number,value:any){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));}
 async function body(req:http.IncomingMessage):Promise<any>{let size=0;const chunks:Buffer[]=[];for await(const chunk of req){size+=chunk.length;if(size>12_000_000)throw new Error('请求超过 12 MB');chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw new Error('请求 JSON 格式错误');}}
-const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.json':'application/json; charset=utf-8'};
+const types:Record<string,string>={'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.svg':'image/svg+xml','.png':'image/png','.json':'application/json; charset=utf-8','.ttf':'font/ttf'};
 const server=http.createServer(async(req,res)=>{
   res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');
   const host=req.headers.host||'';
@@ -69,6 +70,11 @@ const server=http.createServer(async(req,res)=>{
       if(url.pathname.startsWith('/api/evaluations/')&&req.method==='DELETE'){evaluation.cancel(url.pathname.split('/').at(-1)!);return json(res,200,{ok:true});}
       if(url.pathname==='/api/models'&&req.method==='GET')return json(res,200,await modelCatalog(agent.tools.desktop));
       if(url.pathname==='/api/connectors'&&req.method==='GET')return json(res,200,await agent.tools.desktop.status(url.searchParams.get('refresh')==='1'));
+      if(url.pathname==='/api/runtime/qwen'&&req.method==='GET')return json(res,200,await qwenStatus());
+      if(url.pathname==='/api/runtime/qwen'&&req.method==='POST'){
+        if(remote)return json(res,403,{error:'请在本机工作台启动本地模型'});
+        await body(req);return json(res,202,startQwen());
+      }
       if(url.pathname==='/api/health'&&req.method==='GET'){
         const engines=(await agent.engines.health()).map(e=>{const last=store.db.prepare("SELECT e.created FROM events e JOIN tasks t ON e.taskId=t.id WHERE e.engine=? AND e.type='engine_done' AND t.status='succeeded' ORDER BY e.id DESC LIMIT 1").get(e.id) as any;return {...e,verifiedAt:last?.created||null};});
         const desktop=agent.tools.desktop.snapshot;

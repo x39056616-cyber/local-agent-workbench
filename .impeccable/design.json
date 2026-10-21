@@ -1,0 +1,494 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-21T10:50:49.638784+00:00",
+  "title": "Design System: 本地 Agent",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "primary",
+        "canonical": "#2855d9",
+        "tonalRamp": [
+          "oklch(15.00% 0.20808 265.06)",
+          "oklch(26.43% 0.20808 265.06)",
+          "oklch(37.86% 0.20808 265.06)",
+          "oklch(49.29% 0.20808 265.06)",
+          "oklch(60.71% 0.20808 265.06)",
+          "oklch(72.14% 0.20808 265.06)",
+          "oklch(83.57% 0.20808 265.06)",
+          "oklch(95.00% 0.20808 265.06)"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "primary-hover",
+        "canonical": "#1f43af",
+        "tonalRamp": [
+          "oklch(15.00% 0.17702 265.24)",
+          "oklch(26.43% 0.17702 265.24)",
+          "oklch(37.86% 0.17702 265.24)",
+          "oklch(49.29% 0.17702 265.24)",
+          "oklch(60.71% 0.17702 265.24)",
+          "oklch(72.14% 0.17702 265.24)",
+          "oklch(83.57% 0.17702 265.24)",
+          "oklch(95.00% 0.17702 265.24)"
+        ]
+      },
+      "ground": {
+        "role": "neutral",
+        "displayName": "ground",
+        "canonical": "#f5f5f3",
+        "tonalRamp": [
+          "oklch(15.00% 0.00265 106.45)",
+          "oklch(26.43% 0.00265 106.45)",
+          "oklch(37.86% 0.00265 106.45)",
+          "oklch(49.29% 0.00265 106.45)",
+          "oklch(60.71% 0.00265 106.45)",
+          "oklch(72.14% 0.00265 106.45)",
+          "oklch(83.57% 0.00265 106.45)",
+          "oklch(95.00% 0.00265 106.45)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "paper",
+        "canonical": "#fff",
+        "tonalRamp": [
+          "oklch(15.00% 0.00000 89.88)",
+          "oklch(26.43% 0.00000 89.88)",
+          "oklch(37.86% 0.00000 89.88)",
+          "oklch(49.29% 0.00000 89.88)",
+          "oklch(60.71% 0.00000 89.88)",
+          "oklch(72.14% 0.00000 89.88)",
+          "oklch(83.57% 0.00000 89.88)",
+          "oklch(95.00% 0.00000 89.88)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "text",
+        "canonical": "#202128",
+        "tonalRamp": [
+          "oklch(15.00% 0.01329 278.97)",
+          "oklch(26.43% 0.01329 278.97)",
+          "oklch(37.86% 0.01329 278.97)",
+          "oklch(49.29% 0.01329 278.97)",
+          "oklch(60.71% 0.01329 278.97)",
+          "oklch(72.14% 0.01329 278.97)",
+          "oklch(83.57% 0.01329 278.97)",
+          "oklch(95.00% 0.01329 278.97)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "muted",
+        "canonical": "#60636d",
+        "tonalRamp": [
+          "oklch(15.00% 0.01627 272.48)",
+          "oklch(26.43% 0.01627 272.48)",
+          "oklch(37.86% 0.01627 272.48)",
+          "oklch(49.29% 0.01627 272.48)",
+          "oklch(60.71% 0.01627 272.48)",
+          "oklch(72.14% 0.01627 272.48)",
+          "oklch(83.57% 0.01627 272.48)",
+          "oklch(95.00% 0.01627 272.48)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "line",
+        "canonical": "#e7e7eb",
+        "tonalRamp": [
+          "oklch(15.00% 0.00536 286.29)",
+          "oklch(26.43% 0.00536 286.29)",
+          "oklch(37.86% 0.00536 286.29)",
+          "oklch(49.29% 0.00536 286.29)",
+          "oklch(60.71% 0.00536 286.29)",
+          "oklch(72.14% 0.00536 286.29)",
+          "oklch(83.57% 0.00536 286.29)",
+          "oklch(95.00% 0.00536 286.29)"
+        ]
+      },
+      "control": {
+        "role": "neutral",
+        "displayName": "control",
+        "canonical": "#cdd0d8",
+        "tonalRamp": [
+          "oklch(15.00% 0.01150 269.53)",
+          "oklch(26.43% 0.01150 269.53)",
+          "oklch(37.86% 0.01150 269.53)",
+          "oklch(49.29% 0.01150 269.53)",
+          "oklch(60.71% 0.01150 269.53)",
+          "oklch(72.14% 0.01150 269.53)",
+          "oklch(83.57% 0.01150 269.53)",
+          "oklch(95.00% 0.01150 269.53)"
+        ]
+      },
+      "inspector": {
+        "role": "neutral",
+        "displayName": "inspector",
+        "canonical": "#fafbfc",
+        "tonalRamp": [
+          "oklch(15.00% 0.00170 247.84)",
+          "oklch(26.43% 0.00170 247.84)",
+          "oklch(37.86% 0.00170 247.84)",
+          "oklch(49.29% 0.00170 247.84)",
+          "oklch(60.71% 0.00170 247.84)",
+          "oklch(72.14% 0.00170 247.84)",
+          "oklch(83.57% 0.00170 247.84)",
+          "oklch(95.00% 0.00170 247.84)"
+        ]
+      },
+      "action-dark": {
+        "role": "semantic",
+        "displayName": "action-dark",
+        "canonical": "#272b36",
+        "tonalRamp": [
+          "oklch(15.00% 0.02093 269.38)",
+          "oklch(26.43% 0.02093 269.38)",
+          "oklch(37.86% 0.02093 269.38)",
+          "oklch(49.29% 0.02093 269.38)",
+          "oklch(60.71% 0.02093 269.38)",
+          "oklch(72.14% 0.02093 269.38)",
+          "oklch(83.57% 0.02093 269.38)",
+          "oklch(95.00% 0.02093 269.38)"
+        ]
+      },
+      "action-dark-hover": {
+        "role": "semantic",
+        "displayName": "action-dark-hover",
+        "canonical": "#3c4353",
+        "tonalRamp": [
+          "oklch(15.00% 0.02890 266.48)",
+          "oklch(26.43% 0.02890 266.48)",
+          "oklch(37.86% 0.02890 266.48)",
+          "oklch(49.29% 0.02890 266.48)",
+          "oklch(60.71% 0.02890 266.48)",
+          "oklch(72.14% 0.02890 266.48)",
+          "oklch(83.57% 0.02890 266.48)",
+          "oklch(95.00% 0.02890 266.48)"
+        ]
+      },
+      "nav-active": {
+        "role": "neutral",
+        "displayName": "nav-active",
+        "canonical": "#e8e9ec",
+        "tonalRamp": [
+          "oklch(15.00% 0.00417 271.37)",
+          "oklch(26.43% 0.00417 271.37)",
+          "oklch(37.86% 0.00417 271.37)",
+          "oklch(49.29% 0.00417 271.37)",
+          "oklch(60.71% 0.00417 271.37)",
+          "oklch(72.14% 0.00417 271.37)",
+          "oklch(83.57% 0.00417 271.37)",
+          "oklch(95.00% 0.00417 271.37)"
+        ]
+      },
+      "success": {
+        "role": "semantic",
+        "displayName": "success",
+        "canonical": "#25825a",
+        "tonalRamp": [
+          "oklch(15.00% 0.10680 160.52)",
+          "oklch(26.43% 0.10680 160.52)",
+          "oklch(37.86% 0.10680 160.52)",
+          "oklch(49.29% 0.10680 160.52)",
+          "oklch(60.71% 0.10680 160.52)",
+          "oklch(72.14% 0.10680 160.52)",
+          "oklch(83.57% 0.10680 160.52)",
+          "oklch(95.00% 0.10680 160.52)"
+        ]
+      },
+      "warning": {
+        "role": "semantic",
+        "displayName": "warning",
+        "canonical": "#a86f0c",
+        "tonalRamp": [
+          "oklch(15.00% 0.12215 72.71)",
+          "oklch(26.43% 0.12215 72.71)",
+          "oklch(37.86% 0.12215 72.71)",
+          "oklch(49.29% 0.12215 72.71)",
+          "oklch(60.71% 0.12215 72.71)",
+          "oklch(72.14% 0.12215 72.71)",
+          "oklch(83.57% 0.12215 72.71)",
+          "oklch(95.00% 0.12215 72.71)"
+        ]
+      },
+      "danger": {
+        "role": "semantic",
+        "displayName": "danger",
+        "canonical": "#bb3440",
+        "tonalRamp": [
+          "oklch(15.00% 0.17090 20.47)",
+          "oklch(26.43% 0.17090 20.47)",
+          "oklch(37.86% 0.17090 20.47)",
+          "oklch(49.29% 0.17090 20.47)",
+          "oklch(60.71% 0.17090 20.47)",
+          "oklch(72.14% 0.17090 20.47)",
+          "oklch(83.57% 0.17090 20.47)",
+          "oklch(95.00% 0.17090 20.47)"
+        ]
+      },
+      "tag-success-text": {
+        "role": "semantic",
+        "displayName": "tag-success-text",
+        "canonical": "#255239",
+        "tonalRamp": [
+          "oklch(15.00% 0.06591 157.20)",
+          "oklch(26.43% 0.06591 157.20)",
+          "oklch(37.86% 0.06591 157.20)",
+          "oklch(49.29% 0.06591 157.20)",
+          "oklch(60.71% 0.06591 157.20)",
+          "oklch(72.14% 0.06591 157.20)",
+          "oklch(83.57% 0.06591 157.20)",
+          "oklch(95.00% 0.06591 157.20)"
+        ]
+      },
+      "tag-success-bg": {
+        "role": "semantic",
+        "displayName": "tag-success-bg",
+        "canonical": "#e7f3eb",
+        "tonalRamp": [
+          "oklch(15.00% 0.01653 156.91)",
+          "oklch(26.43% 0.01653 156.91)",
+          "oklch(37.86% 0.01653 156.91)",
+          "oklch(49.29% 0.01653 156.91)",
+          "oklch(60.71% 0.01653 156.91)",
+          "oklch(72.14% 0.01653 156.91)",
+          "oklch(83.57% 0.01653 156.91)",
+          "oklch(95.00% 0.01653 156.91)"
+        ]
+      },
+      "tag-warning-text": {
+        "role": "semantic",
+        "displayName": "tag-warning-text",
+        "canonical": "#855300",
+        "tonalRamp": [
+          "oklch(15.00% 0.10561 69.90)",
+          "oklch(26.43% 0.10561 69.90)",
+          "oklch(37.86% 0.10561 69.90)",
+          "oklch(49.29% 0.10561 69.90)",
+          "oklch(60.71% 0.10561 69.90)",
+          "oklch(72.14% 0.10561 69.90)",
+          "oklch(83.57% 0.10561 69.90)",
+          "oklch(95.00% 0.10561 69.90)"
+        ]
+      },
+      "tag-warning-bg": {
+        "role": "semantic",
+        "displayName": "tag-warning-bg",
+        "canonical": "#fff4da",
+        "tonalRamp": [
+          "oklch(15.00% 0.03600 87.79)",
+          "oklch(26.43% 0.03600 87.79)",
+          "oklch(37.86% 0.03600 87.79)",
+          "oklch(49.29% 0.03600 87.79)",
+          "oklch(60.71% 0.03600 87.79)",
+          "oklch(72.14% 0.03600 87.79)",
+          "oklch(83.57% 0.03600 87.79)",
+          "oklch(95.00% 0.03600 87.79)"
+        ]
+      },
+      "tag-danger-text": {
+        "role": "semantic",
+        "displayName": "tag-danger-text",
+        "canonical": "#982b37",
+        "tonalRamp": [
+          "oklch(15.00% 0.14388 18.83)",
+          "oklch(26.43% 0.14388 18.83)",
+          "oklch(37.86% 0.14388 18.83)",
+          "oklch(49.29% 0.14388 18.83)",
+          "oklch(60.71% 0.14388 18.83)",
+          "oklch(72.14% 0.14388 18.83)",
+          "oklch(83.57% 0.14388 18.83)",
+          "oklch(95.00% 0.14388 18.83)"
+        ]
+      },
+      "tag-danger-bg": {
+        "role": "semantic",
+        "displayName": "tag-danger-bg",
+        "canonical": "#ffedf0",
+        "tonalRamp": [
+          "oklch(15.00% 0.01989 5.98)",
+          "oklch(26.43% 0.01989 5.98)",
+          "oklch(37.86% 0.01989 5.98)",
+          "oklch(49.29% 0.01989 5.98)",
+          "oklch(60.71% 0.01989 5.98)",
+          "oklch(72.14% 0.01989 5.98)",
+          "oklch(83.57% 0.01989 5.98)",
+          "oklch(95.00% 0.01989 5.98)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "headline",
+        "purpose": "首页任务标题"
+      },
+      "page-title": {
+        "displayName": "page-title",
+        "purpose": "管理页面标题"
+      },
+      "title": {
+        "displayName": "title",
+        "purpose": "章节标题"
+      },
+      "body": {
+        "displayName": "body",
+        "purpose": "全局正文基准"
+      },
+      "composer": {
+        "displayName": "composer",
+        "purpose": "输入和首页说明"
+      },
+      "label": {
+        "displayName": "label",
+        "purpose": "操作标签"
+      },
+      "caption": {
+        "displayName": "caption",
+        "purpose": "辅助状态"
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "state-transition",
+        "value": "background-color .15s, border-color .15s, color .15s",
+        "purpose": "按钮与链接状态切换。"
+      },
+      {
+        "name": "composer-border",
+        "value": "border-color .18s",
+        "purpose": "输入容器焦点边线。"
+      },
+      {
+        "name": "disclosure-arrow",
+        "value": "transform .18s",
+        "purpose": "折叠区 SVG 箭头旋转。"
+      },
+      {
+        "name": "ready-pulse",
+        "value": "1.5s ease-in-out infinite; 50% { opacity: .4; }",
+        "purpose": "准备与执行圆点；减少动态效果设置下关闭。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "wide-min",
+        "value": "1600px"
+      },
+      {
+        "name": "compact-max",
+        "value": "1200px"
+      },
+      {
+        "name": "drawer-max",
+        "value": "1100px"
+      },
+      {
+        "name": "stack-max",
+        "value": "800px"
+      },
+      {
+        "name": "phone-max",
+        "value": "480px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "提交按钮",
+      "kind": "button",
+      "refersTo": "button-submit",
+      "description": "首页提交；禁用与焦点样式来自现有实现。",
+      "html": "<button class=\"ds-send\">开始 <svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\"><path d=\"M5 12h14m-6-6 6 6-6 6\"/></svg></button>",
+      "css": ".ds-send{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;display:inline-flex;align-items:center;justify-content:center;gap:10px;min-width:92px;height:38px;padding:0 15px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-size:14px;cursor:pointer;transition:background-color .15s}.ds-send:hover{background:#1f43af}.ds-send:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}.ds-send:disabled{background:#e6e8ee;color:#777c89;cursor:not-allowed}"
+    },
+    {
+      "name": "保存按钮",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "设置页深墨色操作。",
+      "html": "<button class=\"ds-primary\">保存设置</button>",
+      "css": ".ds-primary{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;background:#272b36;color:#fff;border:1px solid #272b36;border-radius:6px;padding:9px 16px;font-size:13px;line-height:1.5;cursor:pointer;transition:background-color .15s}.ds-primary:hover{background:#3c4353}.ds-primary:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}.ds-primary:disabled{opacity:.5;cursor:not-allowed}"
+    },
+    {
+      "name": "普通输入",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "设置与表单的原生输入。",
+      "html": "<input class=\"ds-input\" aria-label=\"工作目录\" placeholder=\"留空创建独立任务目录\">",
+      "css": ".ds-input{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;max-width:100%;border:1px solid var(--control);border-radius:6px;background:white;padding:9px 12px;line-height:1.5;font-size:14px;color:var(--text);caret-color:var(--accent)}.ds-input::placeholder{color:#686e73;opacity:1}.ds-input:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}"
+    },
+    {
+      "name": "导航项",
+      "kind": "nav",
+      "refersTo": "nav-active",
+      "description": "当前页面使用中性选中背景。",
+      "html": "<nav class=\"ds-nav\"><button class=\"ds-nav-active\">任务工作台</button><button>运行设置</button></nav>",
+      "css": ".ds-nav{display:flex;flex-direction:column;gap:4px}.ds-nav button{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;text-align:left;padding:10px 12px;border:0;border-radius:8px;min-height:42px;font-size:14px;color:#555d63;background:transparent;cursor:pointer;transition:background-color .15s}.ds-nav .ds-nav-active{background:#e8e9ec;color:#242735;font-weight:600}.ds-nav button:hover{background:#ededf0}.ds-nav button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;}"
+    },
+    {
+      "name": "完成标签",
+      "kind": "chip",
+      "refersTo": "status-success",
+      "description": "非交互任务状态标签；文字与颜色共同表达状态。",
+      "html": "<span class=\"ds-status\">已完成</span>",
+      "css": ".ds-status{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;display:inline-block;white-space:nowrap;font-size:12px;line-height:1.6;padding:3px 7px;border-radius:5px;color:#255239;background:#e7f3eb}"
+    },
+    {
+      "name": "引擎卡片",
+      "kind": "card",
+      "refersTo": "engine-card",
+      "description": "能力页平面容器，无独立交互状态。",
+      "html": "<article class=\"ds-card\"><h2>本地 Qwen</h2><p>模型与工具状态由本机服务提供。</p></article>",
+      "css": ".ds-card{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;border:1px solid var(--line);border-radius:12px;padding:20px;min-width:0;background:#fff;color:var(--text)}.ds-card h2{font-size:16px;font-weight:600;line-height:1.5;margin:18px 0 10px}.ds-card p{font-size:13px;line-height:1.8;color:var(--muted);margin-bottom:0}"
+    },
+    {
+      "name": "任务输入容器",
+      "kind": "custom",
+      "refersTo": "composer",
+      "description": "通过容器边线显示输入焦点。",
+      "html": "<div class=\"ds-composer\"><textarea aria-label=\"任务内容\" placeholder=\"描述你想完成的任务…\"></textarea></div>",
+      "css": ".ds-composer{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;border:1px solid #cdd1dc;border-radius:14px;background:#fff;padding:20px;box-shadow:none;transition:border-color .18s}.ds-composer:focus-within{border-color:var(--accent)}.ds-composer textarea{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;display:block;width:100%;min-height:116px;max-height:220px;padding:0;border:0;background:transparent;outline:none;font-size:15px;line-height:1.8;resize:vertical;color:var(--text);caret-color:var(--accent)}.ds-composer textarea::placeholder{color:#686e73;opacity:1}"
+    }
+  ],
+  "narrative": {
+    "northStar": "现代编辑室的多人会签",
+    "overview": "近白工作区与浅石灰导航形成稳定的区域关系，墨色正文承载主要信息，钴蓝标识提交与键盘焦点。界面依靠边缘对齐、细分隔线和有限圆角组织密集信息。这里的“清晰、克制”是对当前实现的描述，不是额外取得的品牌承诺。\n\n本文件按 web/style.css 的最终级联与现有 React 组件提取。方向来源为 seed:faeb325d81835ddd；对应页面策略保存在 .impeccable/surfaces/web-main-tsx.md。没有图像 comp 或 shipping raster，亦没有把旧 Framed sheet 方向延续为规则。",
+    "keyCharacteristics": [
+      "浅石灰导航、白色主区与浅灰详情区。",
+      "本地字体、紧凑标签、较宽任务输入。",
+      "用文字、图标和颜色共同表达状态。"
+    ],
+    "rules": [
+      {
+        "name": "The Action Accent Rule",
+        "body": "钴蓝用于提交、焦点和进行中的执行标记；设置页保存按钮沿用深墨色变体。",
+        "section": "colors"
+      },
+      {
+        "name": "The Text Evidence Rule",
+        "body": "状态同时保留明确文字；模型参与、派发与耗时必须跟随实际配置或事件。",
+        "section": "typography"
+      },
+      {
+        "name": "The Flat Surface Rule",
+        "body": "工作区依靠背景与边线区分层级，现行输入容器不使用投影。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do 使用现有正文、标签与标题层级组织信息，并保留简体中文与真实模型名称。",
+      "Do 复用钴蓝提交、深墨色保存及中性次级按钮的实际分工。",
+      "Do 保留键盘焦点、折叠摘要、状态文字与减少动态效果设置。",
+      "Do 在更改视觉时检查最终 CSS 级联及桌面、抽屉导航与手机布局。"
+    ],
+    "donts": [
+      "Don't 将模型已连接等同于本任务已经派发或已经执行。",
+      "Don't 把计划、测试通过或设计描述写成尚未完成的终审结论。",
+      "Don't 把旧方向的纸张纹理、器材装饰或 Framed sheet 容器重新当作现行系统依据。"
+    ]
+  }
+}

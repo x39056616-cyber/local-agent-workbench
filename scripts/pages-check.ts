@@ -16,9 +16,9 @@ try{
  await context.grantPermissions(['local-network-access'],{origin:new URL(published).origin});
  const session=await context.request.get(local+'/api/session');assert(session.ok());
  const pair=await context.request.post(local+'/api/pair',{data:{}});assert(pair.ok());const {url}=await pair.json();
- const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(url,{waitUntil:'domcontentloaded',timeout:90000});await page.getByRole('heading',{name:/把目标交给它/}).waitFor({timeout:60000});assert.equal(new URL(page.url()).hash,'');
+ const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));await page.goto(url,{waitUntil:'domcontentloaded',timeout:90000});await page.getByRole('heading',{name:'今天要完成什么？'}).waitFor({timeout:60000});assert.equal(new URL(page.url()).hash,'#tasks');
  report.connection={realHttps:true,paired:true,fragmentRemoved:true};
- await page.getByRole('combobox',{name:'选择执行器'}).selectOption('qwen');await page.getByLabel('本地 Qwen 强度').selectOption('none');
+ await page.getByRole('combobox',{name:'选择执行器'}).selectOption('qwen');await page.locator('.task-options>summary').click();await page.getByLabel('本地 Qwen 强度').selectOption('none');
  await page.getByLabel('任务内容').fill('这是 GitHub 网页的固定文本验收。只调用 write_file 写入 pages-check.txt，内容精确为 PUBLIC_PAGE_OK。最后调用 finish_task，outcome=completed，files=[pages-check.txt]。不要读取账号信息、调用连接器或运行命令。');
  const created=page.waitForResponse(r=>r.url()===local+'/api/tasks'&&r.request().method()==='POST');await page.getByRole('button',{name:'提交任务'}).click();const task=await(await created).json();assert(task.id);report.taskId=task.id;
  const deadline=Date.now()+300000;let detail:any;
