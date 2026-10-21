@@ -1,6 +1,6 @@
 # 本地 Agent 工作台
 
-把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen。普通问答直接回复；需要文件、联网或本机操作的任务，默认由后端协调 Qwen 规划、DeepSeek 执行、Codex 独立核验。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md) 和 [聊天与性能验收](CHAT-PERFORMANCE.md)。
+把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen。普通问答直接回复；需要文件、联网或本机操作的任务，默认由后端协调 Qwen 查阅资料和规划、DeepSeek 执行、Codex 独立核验。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md)、[聊天与性能验收](CHAT-PERFORMANCE.md) 和 [研究及执行链自查](RESEARCH-AUDIT.md)。
 
 发布网页：[GitHub Pages](https://x39056616-cyber.github.io/local-agent-workbench/)；源码：[local-agent-workbench](https://github.com/x39056616-cyber/local-agent-workbench)。部署与配对步骤见 [DEPLOY.md](DEPLOY.md)。
 
