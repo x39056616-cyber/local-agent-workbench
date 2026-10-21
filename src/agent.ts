@@ -21,14 +21,16 @@ export class Agent extends EventEmitter {
     this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
   }
   emitEvent(taskId:string,type:string,engine:string,data:any){const e=this.store.event(taskId,type,engine,data);this.emit('event',e);}
-  async enqueue(task:Task){this.emitEvent(task.id,'status','system',{status:'queued'});if(taskRoute(task).kind==='chat')void this.runChat(task);else void this.pump();}
+  async enqueue(task:Task){const o=JSON.parse(task.options||'{}'),turnId=o.turnId||task.id;if(!this.store.events(task.id).some(e=>e.type==='user_message'&&e.data.turnId===turnId))this.emitEvent(task.id,'user_message','user',{text:o.currentPrompt||task.prompt,turnId});this.emitEvent(task.id,'status','system',{status:'queued',intent:o.intent,engine:task.engine});if(taskRoute(task).kind==='chat')void this.runChat(task);else void this.pump();}
   async runChat(task:Task){
     if(this.chats.has(task.id))return;const controller=new AbortController();this.chats.set(task.id,controller);const route=taskRoute(task),start=performance.now();
-    const ctx:RunContext={task,chat:true,specs:[],signal:controller.signal,emit:(type,e,data)=>this.emitEvent(task.id,type,e,data),tool:async()=>{throw new Error('快捷对话不允许工具执行');}};
+    const options=JSON.parse(task.options||'{}');let pending='',first=true,flushTimer:ReturnType<typeof setTimeout>|undefined;
+    const flush=()=>{if(flushTimer)clearTimeout(flushTimer);flushTimer=undefined;if(pending){this.emitEvent(task.id,'chat_delta',route.engine,{text:pending});pending='';}};
+    const ctx:RunContext={task,chat:true,specs:[],signal:controller.signal,emit:(type,e,data)=>{if(type!=='chat_delta'){this.emitEvent(task.id,type,e,data);return;}if(first){first=false;this.emitEvent(task.id,type,e,data);}else{pending+=data.text;if(!flushTimer)flushTimer=setTimeout(flush,24);}},tool:async()=>{throw new Error('快捷对话不允许工具执行');}};
     const timer=setTimeout(()=>controller.abort(new Error('快捷对话超时，请检查模型连接或关闭思考')),90000);
-    try{this.store.update(task.id,{status:'running',error:''});ctx.emit('status','system',{status:'running'});ctx.emit('routing','system',route);await fs.mkdir(task.workspace,{recursive:true});const result=await this.engines.chat(route.engine,task.prompt,ctx);controller.signal.throwIfAborted();await fs.writeFile(path.join(task.workspace,'agent-result.md'),result);ctx.emit('artifact','system',{path:'agent-result.md'});ctx.emit('latency','system',{totalMs:Math.round(performance.now()-start)});this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded'});}
+    try{this.store.update(task.id,{status:'running',error:'',result:''});ctx.emit('status','system',{status:'running',result:''});ctx.emit('routing','system',route);const result=await this.engines.chat(route.engine,options.currentPrompt||task.prompt,ctx);controller.signal.throwIfAborted();flush();ctx.emit('final',route.engine,{text:result,turnId:options.turnId||task.id});ctx.emit('latency','system',{totalMs:Math.round(performance.now()-start)});this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded',result});}
     catch(e){const status=controller.signal.aborted?'cancelled':'failed',error=errorText(controller.signal.aborted?controller.signal.reason:e);this.store.update(task.id,{status,error});ctx.emit('status','system',{status,error});}
-    finally{clearTimeout(timer);this.chats.delete(task.id);}
+    finally{flush();clearTimeout(timer);this.chats.delete(task.id);}
   }
   async pump(){
     if(this.active)return;
@@ -43,10 +45,11 @@ export class Agent extends EventEmitter {
       await fs.mkdir(task.workspace,{recursive:true});
       const history=this.store.events(task.id).filter(e=>['engine_done','checkpoint','tool_done'].includes(e.type)).slice(-10).map(e=>({type:e.type,engine:e.engine,data:e.data}));
       const evaluation=JSON.parse(task.options||'{}').evaluation;
-      const retrieved=evaluation?{hits:[],mode:'evaluation-isolated',warning:''}:await this.tools.retrieval.search(task.prompt,'all',task.id,controller.signal);
+      const retrieved=evaluation?{hits:[],mode:'evaluation-isolated',warning:''}:await this.tools.retrieval.search(JSON.parse(task.options||'{}').currentPrompt||task.prompt,'all',task.id,controller.signal);
       const memory=retrieved.hits.map((m:any)=>`[${m.scope} / ${m.title||m.source}] ${m.text}`).join('\n');
       ctx.emit('retrieval','system',{mode:retrieved.mode,hits:retrieved.hits.length,warning:retrieved.warning});
-      const prompt=`任务工作目录：${task.workspace}\n用户任务：${task.prompt}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；成果必须写入工作目录并读取核对。`;
+      const options=JSON.parse(task.options||'{}');
+      const prompt=`任务工作目录：${task.workspace}\n用户任务：${options.currentPrompt||task.prompt}\n${options.conversation?.length?'此前对话（仅作任务上下文）：\n'+JSON.stringify(options.conversation).slice(-18000):''}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；仅在用户需要文件时生成成果。完成时提交可直接展示给用户的最终回答，而不是执行计划。`;
       const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
       ctx.emit('workflow_start','system',workflow);
       const result=evaluation?.kind==='bfcl'?await this.engines.serialQwen(()=>runBfcl(ctx,evaluation),ctx):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt,ctx,workflow);
@@ -62,9 +65,11 @@ export class Agent extends EventEmitter {
       ctx.emit('verification','system',{files:verified,note:'检查已登记文件是否存在；内容正确性与任务相关测试以执行记录为准。'});
       if(verified.some(x=>!x.exists))throw new Error('部分登记成果不存在，请检查执行记录');
       if(evaluation?.kind==='gaia'){const answer=await fs.readFile(await safePath(task.workspace,'answer.txt'),'utf8');await fs.writeFile(path.join(task.workspace,'prediction.json'),JSON.stringify(answer.trim()));ctx.emit('artifact','system',{path:'prediction.json'});}
-      await fs.writeFile(path.join(task.workspace,'agent-result.md'),result||'任务执行完毕，请查看工具记录。','utf8');
+      const answer=String(completion.data.summary||result||'任务已完成。');
+      await fs.writeFile(path.join(task.workspace,'agent-result.md'),answer,'utf8');
       ctx.emit('artifact','system',{path:'agent-result.md'});
-      this.store.update(task.id,{status:'succeeded',result});ctx.emit('status','system',{status:'succeeded'});
+      ctx.emit('final',rootEngine,{text:answer,files:completion.data.files,turnId:options.turnId||task.id});
+      this.store.update(task.id,{status:'succeeded',result:answer});ctx.emit('status','system',{status:'succeeded',result:answer});
     }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});ctx.emit('status','system',{status,error:message});}
     finally{clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }

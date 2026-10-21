@@ -12,7 +12,16 @@ New-Item -ItemType Directory -Path $DataDirectory -Force | Out-Null
 $statePath=Join-Path $DataDirectory 'qwen-startup.json'
 function Set-State([string]$status,[string]$message){
   $state=@{status=$status;message=$message;updated=[DateTime]::UtcNow.ToString('o')}|ConvertTo-Json -Compress
-  [IO.File]::WriteAllText($statePath,$state,(New-Object Text.UTF8Encoding($false)))
+  $temporary=$statePath+'.'+[Guid]::NewGuid().ToString('N')+'.tmp'
+  try{
+    [IO.File]::WriteAllText($temporary,$state,(New-Object Text.UTF8Encoding($false)))
+    for($attempt=0;$attempt -lt 8;$attempt++){
+      try{
+        if([IO.File]::Exists($statePath)){[IO.File]::Replace($temporary,$statePath,[NullString]::Value)}else{[IO.File]::Move($temporary,$statePath)}
+        return
+      }catch [IO.IOException]{if($attempt -eq 7){throw};Start-Sleep -Milliseconds 30}
+    }
+  }finally{if([IO.File]::Exists($temporary)){[IO.File]::Delete($temporary)}}
 }
 function Models { return (Invoke-RestMethod ($apiRoot+'/api/v1/models') -TimeoutSec 3).models }
 function Find-Qwen { return @(Models | Where-Object { $_.key -eq $Model }) | Select-Object -First 1 }
@@ -22,7 +31,6 @@ $ownsLock=$false
 try{
   try{$ownsLock=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$ownsLock=$true}
   if(-not $ownsLock){
-    Set-State 'loading' '另一个工作台正在准备 Qwen，等待模型就绪'
     $deadline=(Get-Date).AddSeconds($LoadTimeoutSeconds)
     do{try{$m=Find-Qwen;if($m -and $m.loaded_instances.Count -gt 0){Set-State 'ready' 'Qwen 已就绪，沿用你的模型设置';exit 0}}catch{};Start-Sleep -Seconds 2}while((Get-Date) -lt $deadline)
     throw 'Timed out waiting for the existing model startup.'

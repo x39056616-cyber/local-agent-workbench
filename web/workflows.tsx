@@ -1,14 +1,14 @@
 import React,{useEffect,useState} from 'react';
 import {api} from './client.ts';
 import {Icon} from './ui.tsx';
-import {isGreeting} from '../src/routing.ts';
+import {taskRoute} from '../src/routing.ts';
 export const defaultWorkflow={mode:'balanced',maxSteps:20,maxRevisions:1};
 const labels:Record<string,string>={balanced:'均衡协作 · Qwen 规划 / DeepSeek 执行 / Codex 核验',native:'原生引擎 · 单模型工具任务',react:'ReAct · 动作与观察',plan:'规划求解 · 先规划后执行',reflection:'反思 · 初稿、审查、修订',team:'角色协作 · 按依赖派发'};
 const engines=['codex','harness','qwen'];
 export function workflowRoles(value:any,engine:string){return value.roles||[{id:'researcher',name:'资料研究员',engine:engine==='auto'?'qwen':engine,instructions:'提取事实并核对出处。'},{id:'builder',name:'执行者',engine:engine==='auto'?'harness':engine,instructions:'完成分析、编写成果并验证。'},{id:'reviewer',name:'审查员',engine:engine==='auto'?'codex':engine,instructions:'核对目标与成果，指出具体问题。'}];}
-export function previewWorkflowRoles(value:any,engine:string,intent:string,prompt:string){
+export function previewWorkflowRoles(value:any,engine:string,intent:string,prompt:string,hasAttachments=false){
  const root=engine==='auto'?'codex':engine;
- const chat=intent==='chat'||intent==='auto'&&isGreeting(prompt)&&['native','balanced'].includes(value.mode);
+ const chat=(intent==='chat'||!!prompt.trim())&&taskRoute({prompt,engine,hasAttachments,options:JSON.stringify({intent,workflow:value})}).kind==='chat';
  if(chat)return [{id:'chat',engine:engine==='auto'?'qwen':engine,name:'快捷对话',instructions:'直接回复，不调用工具'}];
  if(['balanced','team'].includes(value.mode))return workflowRoles(value,engine);
  if(value.mode==='reflection')return [{id:'draft',engine:root,name:'执行与修订',instructions:'制作成果，并按核验反馈修订'},workflowRoles(value,engine).find((r:any)=>r.id==='reviewer')||{id:'reviewer',engine:root,name:'核验',instructions:'检查成果'}];

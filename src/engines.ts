@@ -29,12 +29,13 @@ export class Engines {
     const start=performance.now();let first=true;
     const stream=(text:string)=>{if(first){first=false;ctx.emit('latency',engine,{firstTokenMs:Math.round(performance.now()-start)});}ctx.emit('chat_delta',engine,{text});};
     ctx.emit('engine_start',engine,{mode:'chat'});
-    const profile=JSON.parse(ctx.task.options||'{}')[engine]||{};
+    const options=JSON.parse(ctx.task.options||'{}'),profile=options[engine]||{};
     const consume=async()=>{
       const isQwen=engine==='qwen',model=isQwen?config.qwenModel:profile.model||this.provider.read().model;
       const effort=profile.effort||(isQwen?'none':'off');
       ctx.emit('model_config',engine,{model,effort,mode:'chat',source:isQwen?'local-api':'deepseek-api'});
-      const body={model,messages:[{role:'system',content:`你是用户的本地 Agent 工作台助手，本次实际回复引擎是 ${isQwen?'本地 Qwen':'DeepSeek API'}。用简体中文简洁直接回答。工作台可以协调 Codex、DeepSeek 和 Qwen 执行任务，但当前为无工具的快捷对话。不要假装已经执行任务。`},{role:'user',content:prompt}],stream:true,stream_options:{include_usage:true},max_tokens:768,...(isQwen?{reasoning_effort:effort==='on'?'low':'none'}:deepseekThinking(effort))};
+      const history=(options.conversation||[]).filter((m:any)=>['user','assistant'].includes(m?.role)&&typeof m.content==='string').slice(-12).map((m:any)=>({role:m.role,content:m.content.slice(-Math.max(1000,Math.floor(18000/Math.max(1,Math.min(12,options.conversation?.length||1)))))}));
+      const body={model,messages:[{role:'system',content:`你是本地 Agent 工作台助手，当前回复模型是 ${isQwen?'Qwen':'DeepSeek'}。用简体中文直接回答用户问题，可使用Markdown与代码块。普通对话不调用工具；不得声称自己是Codex或已执行本机操作。需要最新资料或操作文件时说明应切换工具任务。`},...history,{role:'user',content:prompt}],stream:true,stream_options:{include_usage:true},max_tokens:4096,...(isQwen?{reasoning_effort:effort==='on'?'low':'none'}:deepseekThinking(effort))};
       const r=isQwen?await fetch(config.qwenBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:ctx.signal}):await this.provider.request('/chat/completions',body,ctx.signal);
       if(!r.ok)throw new Error('对话接口 HTTP '+r.status);
       return readChatStream(r,stream,usage=>ctx.emit('usage',engine,usage),ctx.signal);
@@ -42,7 +43,7 @@ export class Engines {
     let result:string;
     if(engine==='qwen'){try{result=await this.serialQwen(consume,ctx);}catch(e){if(ctx.signal.aborted)throw e;throw new Error('本地 Qwen 对话失败，请确认 Bionic 本地 API 已开启：'+errorText(e));}}
     else if(engine==='harness'&&this.provider.read().mode==='api')result=await consume();
-    else {const scoped={...ctx,chat:true,specs:[],emit:(type:string,e:string,data:any)=>{if(type==='delta'){stream(data.text||'');return;}if(type==='message'){stream(data.text||'');return;}ctx.emit(type,e,data);}};result=engine==='harness'?await this.harness(prompt,scoped):await this.codex(prompt,scoped,false);}
+    else {const prior=(options.conversation||[]).slice(-12).map((m:any)=>({role:m.role,content:String(m.content).slice(-1500)}));const userPrompt=prior.length?'此前对话：'+JSON.stringify(prior)+'\n当前用户消息：'+prompt:prompt;const scoped={...ctx,chat:true,specs:[],emit:(type:string,e:string,data:any)=>{if(type==='delta'){stream(data.text||'');return;}if(type==='message'){stream(data.text||'');return;}ctx.emit(type,e,data);}};result=engine==='harness'?await this.harness(userPrompt,scoped):await this.codex(userPrompt,scoped,false);}
     if(!result.trim())throw new Error('对话引擎没有返回正文');ctx.emit('engine_done',engine,{result:result.slice(0,12000),mode:'chat',durationMs:Math.round(performance.now()-start)});return result;
   }
   async deepseek(prompt:string,ctx:RunContext):Promise<string>{
@@ -175,7 +176,7 @@ export class Engines {
     const abort=()=>rpc.kill();ctx.signal.addEventListener('abort',abort,{once:true});
     const sessionId=randomUUID();let result='',running=false;
     try{
-      await rpc.request('initialize',{cwd:ctx.task.workspace,provider:'deepseek-account',model:profile.model||'deepseek-flash',maxTokens:ctx.chat?1024:8192,...(profile.effort?{reasoningEffort:profile.effort}:ctx.chat?{reasoningEffort:'off'}:{})},45000);
+      await rpc.request('initialize',{cwd:ctx.task.workspace,provider:'deepseek-account',model:profile.model||'deepseek-flash',maxTokens:ctx.chat?4096:8192,...(profile.effort?{reasoningEffort:profile.effort}:ctx.chat?{reasoningEffort:'off'}:{})},45000);
       ctx.emit('model_config','harness',{model:profile.model||'deepseek-flash',source:'harness-account',effort:profile.effort||(ctx.chat?'off':'inherit'),parameter:profile.effort?{reasoningEffort:profile.effort}:null});
       if(!rpc.stderr.includes('WORKBENCH_BRIDGE_READY'))throw new Error('工作台工具桥未完整加载，已停止模型调用。请运行 npm run probe 检查安装。');
       ctx.emit('session','harness',{id:sessionId});

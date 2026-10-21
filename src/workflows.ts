@@ -38,11 +38,12 @@ export class Workflows {
   constructor(engines:Engines,store:Store,activate:(ctx:RunContext)=>void){this.engines=engines;this.store=store;this.activate=activate;}
   async run(prompt:string,ctx:RunContext,w:Workflow):Promise<string>{
     const root=ctx.task.engine==='auto'?'codex':ctx.task.engine;
+    const turn=JSON.parse(ctx.task.options||'{}').turnId,taskKey=turn?ctx.task.prompt+'\n'+turn:ctx.task.prompt;
     if(w.mode==='native')return this.engines.run(root,prompt,ctx);
     let stages=0;
     const stage=async(id:string,engine:string,instruction:string,validate:(v:any)=>any,allowRead=false,requireRead=false)=>{
       ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('已达到机制阶段上限，检查点已保存');
-      const key=createHash('sha256').update(JSON.stringify([ctx.task.prompt,w,id,engine,instruction])).digest('hex');
+      const key=createHash('sha256').update(JSON.stringify([taskKey,w,id,engine,instruction])).digest('hex');
       const old=this.store.events(ctx.task.id).find(e=>e.type==='stage_done'&&e.data.key===key);
       if(old){ctx.emit('stage_reused',engine,{id,key});return validate(old.data.value);}
       let submitted=false,value:any,reads=0;
@@ -77,7 +78,7 @@ export class Workflows {
       let output:any;
       for(let revision=0;revision<=w.maxRevisions;revision++){
         ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('达到协作阶段预算');
-        const id='balanced.execute.'+revision,key=createHash('sha256').update(JSON.stringify([ctx.task.prompt,w,plan,id,output])).digest('hex');let completion:any;
+        const id='balanced.execute.'+revision,key=createHash('sha256').update(JSON.stringify([taskKey,w,plan,id,output])).digest('hex');let completion:any;
         const prior=this.store.events(ctx.task.id),done=prior.find(e=>e.type==='subagent_done'&&e.data.key===key);
         if(done){completion=done.data.result;for(const f of completion.files)await stat(await safePath(ctx.task.workspace,f));ctx.emit('stage_reused',worker.engine,{id,key});}
         else if(prior.some(e=>e.type==='subagent_start'&&e.data.key===key))throw new Error('执行子任务曾中断，副作用状态未确认，请核对现有成果并补充指令后继续');
@@ -115,7 +116,7 @@ export class Workflows {
           ctx.emit('subtask_completion',engine,{id,...decision});
           return decision;
         }
-        const actionKey=createHash('sha256').update(JSON.stringify([ctx.task.prompt,w,id,i,goal,decision])).digest('hex');
+        const actionKey=createHash('sha256').update(JSON.stringify([taskKey,w,id,i,goal,decision])).digest('hex');
         const prior=this.store.events(ctx.task.id);
         const observed=prior.find(e=>e.type==='observation'&&e.data.key===actionKey);
         if(observed){observations.push({action:decision.action,arguments:decision.arguments,result:observed.data.result});continue;}

@@ -22,6 +22,8 @@ test('ReAct 真正执行动作、观察并完成；续接不重放成功写操�
   const engine:any={run:async(_e:string,_p:string,ctx:RunContext)=>{requests++;await assert.rejects(ctx.tool('write_file',{path:'escape',content:'x'},'qwen'),/禁止/);denied=true;await ctx.tool('submit_stage',{payload:JSON.stringify(ctx.stage!.id.endsWith('.1')?{action:'write_file',arguments:{path:'test.txt',content:'OK'}}:{done:true,summary:'完成',files:['test.txt']})},'qwen');return '';}};
   const runner=new Workflows(engine,s,()=>{}),w=validateWorkflow({mode:'react'},'qwen');await runner.run('测试',c,w);assert(denied);assert.equal(requests,2);
   await runner.run('测试',c,w);assert.equal(requests,2);assert.equal(s.events(c.task.id).filter(e=>e.type==='tool_start'&&e.data.name==='write_file').length,1);
+  c.task.options=JSON.stringify({turnId:'new-turn'});await runner.run('测试',c,w);assert.equal(requests,4,'新一轮用户指令不能复用上一轮完成结果');assert.equal(s.events(c.task.id).filter(e=>e.type==='tool_start'&&e.data.name==='write_file').length,2);
+  await runner.run('测试',c,w);assert.equal(requests,4,'同一轮重试仍不能重放成功写操作');
 }));
 test('反思不通过触发修订，预算耗尽不得标为完成',async()=>fixture(async(s,c)=>{
   const engine:any={run:async(_e:string,_p:string,ctx:RunContext)=>{const review=ctx.stage!.id.startsWith('review');await ctx.tool('submit_stage',{payload:JSON.stringify(review?{passed:false,issues:['缺少证据']}:{done:true,summary:'初稿',files:[]})},'qwen');return '';}};

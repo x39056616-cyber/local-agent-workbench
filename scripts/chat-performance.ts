@@ -1,0 +1,19 @@
+// 仅对隔离服务运行；对照同一引擎适配器，不冒充官方网页测速。
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {Engines} from '../src/engines.ts';
+import {config} from '../src/config.ts';
+const base='http://127.0.0.1:4323',session=await fetch(base+'/api/session'),cookie=session.headers.get('set-cookie')!.split(';')[0],s:any=await session.json();
+assert.equal(path.resolve(s.defaultWorkspace),path.resolve('acceptance/conversation-data/tasks'));
+const profiles={qwen:{model:config.qwenModel,effort:'none'},harness:{model:'deepseek-flash',effort:'off'},codex:{model:'gpt-6.1-sol',effort:'low'}},rows:any[]=[];
+async function api(p:string,method='GET',body?:any){const r=await fetch(base+'/api'+p,{method,headers:{cookie,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const d:any=await r.json();assert(r.ok,JSON.stringify(d));return d;}
+const direct=new Engines('',()=>[]);
+async function measure(engine:string,mode:string,prompt:string){const start=performance.now();let first:number|undefined,text='',taskId='',executorMs:number|undefined;
+ if(mode==='direct'){text=await direct.chat(engine,prompt,{task:{id:'benchmark',workspace:process.cwd(),options:JSON.stringify(profiles)},signal:AbortSignal.timeout(90000),emit:(type:string,_e:string,d:any)=>{if(type==='chat_delta'&&first===undefined)first=performance.now()-start;},tool:async()=>{throw new Error('无工具');}} as any);}
+ else{const t=await api('/tasks','POST',{engine,prompt,options:profiles});taskId=t.id;for(;;){const d=await api('/tasks/'+t.id);const firstEvent=d.events.find((e:any)=>e.type==='latency'&&e.data.firstTokenMs!==undefined);if(firstEvent)first=firstEvent.data.firstTokenMs;if(['succeeded','failed','cancelled'].includes(d.task.status)){assert.equal(d.task.status,'succeeded',d.task.error);assert(!d.events.some((e:any)=>['tool_start','artifact','retrieval'].includes(e.type)));text=d.task.result;executorMs=d.events.find((e:any)=>e.type==='engine_done'&&e.data.mode==='chat')?.data.durationMs;break;}if(performance.now()-start>100000)throw new Error('测速超时');await new Promise(r=>setTimeout(r,40));}}
+ const totalMs=Math.round(performance.now()-start),row={engine,mode,prompt,totalMs,executorMs,deliveryOverheadMs:executorMs===undefined?undefined:totalMs-executorMs,firstTokenMs:Math.round(first||0),chars:text.length,taskId};rows.push(row);console.log(JSON.stringify(row));await mkdir('acceptance',{recursive:true});await writeFile(process.env.LA_BENCH_OUTPUT||'acceptance/chat-performance.json',JSON.stringify(rows,null,2));return {text,taskId};}
+for(const engine of (process.env.LA_BENCH_ENGINES||'qwen,harness,codex').split(','))for(let i=0;i<Number(process.env.LA_BENCH_ROUNDS||(engine==='qwen'?5:3));i++){const prompt=i===0?'你好，你是谁？请只用一句话回答。':'请严格只回复以下文字，不要添加标点或解释：多模型协作需要明确任务边界';for(const mode of i%2?['app','direct']:['direct','app'])await measure(engine,mode,prompt);}
+const t=await api('/tasks','POST',{engine:'qwen',prompt:'请记住这次对话的代号是星海四七。只回复已记住。',options:profiles});
+async function wait(id:string){for(let n=0;n<900;n++){const d=await api('/tasks/'+id);if(['succeeded','failed','cancelled'].includes(d.task.status)){assert.equal(d.task.status,'succeeded',d.task.error);return d;}await new Promise(r=>setTimeout(r,100));}throw new Error('连续对话超时');}
+await wait(t.id);await api('/tasks/'+t.id+'/resume','POST',{prompt:'刚才的代号是什么？只回复代号。',engine:'qwen',intent:'auto',options:profiles});const d=await wait(t.id);assert(d.task.result.includes('星海四七'));assert.equal(d.events.filter((e:any)=>e.type==='user_message').length,2);assert.equal(d.events.filter((e:any)=>e.type==='final').length,2);await writeFile('acceptance/conversation-check.json',JSON.stringify({passed:true,taskId:t.id,turns:2,contextPreserved:true},null,2));console.log('连续对话上下文通过');

@@ -10,8 +10,9 @@ import { safePath, toolSpecs } from './tools.ts';
 import { modelCatalog, validateProfiles } from './profiles.ts';
 import {validateWorkflow} from './workflows.ts';
 import {Evaluation,evaluationExamples} from './evaluation.ts';
-import {isGreeting} from './routing.ts';
+import {isGreeting,taskRoute} from './routing.ts';
 import {startQwen,qwenStatus} from './runtime.ts';
+import {previewArtifact} from './artifacts.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -80,18 +81,18 @@ const server=http.createServer(async(req,res)=>{
         const desktop=agent.tools.desktop.snapshot;
         return json(res,200,{engines,tools:toolSpecs(true),skills:agent.tools.skills,retrieval:agent.tools.retrieval.status(),connectors:{checkedAt:desktop.checkedAt,apps:desktop.apps,error:desktop.error,detail:desktop.checkedAt?'已通过 Codex App Server 验证运行时状态；媒体及宿主交互工具仍需桌面查看。':'点击检测连接器，核对当前登录下可用的桌面能力。'}});
       }
-      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list().filter(t=>Boolean(t.archived)===(url.searchParams.get('archived')==='1')));
+      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list().filter(t=>Boolean(t.archived)===(url.searchParams.get('archived')==='1')).map(({id,title,status,engine,created,updated,archived})=>({id,title,status,engine,created,updated,archived})));
       if(url.pathname==='/api/tasks'&&req.method==='POST'){
         const data=await body(req);if(typeof data.prompt!=='string'||!data.prompt.trim()||data.prompt.length>30000)throw new Error('请输入 1–30000 字符的任务');
         if(!['auto','codex','harness','qwen'].includes(data.engine))throw new Error('执行器无效');
         if(data.intent!==undefined&&!['auto','chat','task'].includes(data.intent))throw new Error('任务类型无效');
         const workflow=validateWorkflow(data.workflow,data.engine);
-        const chat=data.intent==='chat'||data.intent!=='task'&&isGreeting(data.prompt)&&['native','balanced'].includes(workflow.mode);
+        const chat=taskRoute({prompt:data.prompt,engine:data.engine,hasAttachments:!!data.files?.length,options:JSON.stringify({intent:data.intent,workflow})}).kind==='chat';
         if(chat&&data.files?.length)throw new Error('带附件请使用工具任务类型，快捷对话不读取附件');
         const requested=data.options??store.setting('profiles',{}),target=data.engine==='auto'?'qwen':data.engine;
         const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
         if(chat&&isGreeting(data.prompt)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
-        const taskOptions={...profiles,workflow,intent:chat?'chat':data.intent||'auto'};
+        const taskOptions={...profiles,workflow,intent:chat?'chat':'task',requestedIntent:data.intent||'auto',turnId:randomBytes(8).toString('hex')};
         if(data.files!==undefined&&(!Array.isArray(data.files)||data.files.length>5))throw new Error('最多上传 5 个附件');
         const uploads=(data.files||[]).map((file:any)=>{if(typeof file.name!=='string'||typeof file.base64!=='string')throw new Error('附件无效');const name=path.basename(file.name).replace(/[^\p{L}\p{N}._ -]/gu,'_');if(!name||['.','..'].includes(name))throw new Error('附件名称无效');const bytes=Buffer.from(file.base64,'base64');if(bytes.length>5_000_000)throw new Error('附件超过 5 MB');return {name,bytes};});
         if(data.workspace && !path.isAbsolute(data.workspace))throw new Error('任务目录必须是绝对路径');
@@ -123,13 +124,26 @@ const server=http.createServer(async(req,res)=>{
           if(['queued','running','waiting','cancelling'].includes(task.status))return json(res,409,{error:'任务正在执行'});
           if(task.archived)return json(res,409,{error:'请先取消归档再继续任务'});
           const input=await body(req);if(input.prompt && typeof input.prompt!=='string')throw new Error('补充指令无效');
-          store.update(task.id,{status:'queued',error:'',...(input.prompt?{prompt:task.prompt+'\n补充要求：'+input.prompt.slice(0,10000)}:{})});
+          const prior=JSON.parse(task.options||'{}');
+          if(input.prompt){
+            const current=input.prompt.slice(0,10000),history=[...(prior.conversation||[]),{role:'user',content:prior.currentPrompt||task.prompt},...(task.result?[{role:'assistant',content:task.result}]:[])].slice(-12);
+            const engine=input.engine||task.engine;if(!['auto','qwen','harness','codex'].includes(engine))throw new Error('执行器无效');
+            const requestedIntent=input.intent||prior.requestedIntent||'auto';if(!['auto','chat','task'].includes(requestedIntent))throw new Error('任务类型无效');
+            const continuingFiles=prior.intent==='task'&&/继续|再改|改成|补充|优化|调整|再生成|这个文件|该文件|刚才的文件|上面的文件/.test(current);
+            const workflow=validateWorkflow(input.workflow||prior.workflow,engine),chat=taskRoute({prompt:current,engine,hasAttachments:continuingFiles,options:JSON.stringify({intent:requestedIntent,workflow})}).kind==='chat';
+            const target=engine==='auto'?'qwen':engine,requested=input.options||Object.fromEntries(['qwen','harness','codex'].filter(k=>prior[k]).map(k=>[k,prior[k]]));
+            const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
+            if(chat&&isGreeting(current)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
+            const next={...prior,...profiles,workflow,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
+            store.update(task.id,{status:'queued',error:'',result:'',engine,options:JSON.stringify(next)});
+          }else store.update(task.id,{status:'queued',error:'',result:''});
           agent.emitEvent(task.id,'checkpoint','user',{message:'用户继续任务。先核对已有成果与操作记录。'});
-          await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true});
+          await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true,task:store.get(task.id)});
         }
         if(action==='files'&&req.method==='GET'){
           const files:any[]=[];const walk=async(dir:string,depth:number)=>{if(depth>3||files.length>=200)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()||['node_modules','.git'].includes(e.name))continue;const p=await safePath(task.workspace,path.join(dir,e.name));if(e.isDirectory())await walk(p,depth+1);else {const s=await fs.stat(p);files.push({path:path.relative(task.workspace,p),bytes:s.size});}}};await walk(task.workspace,0);return json(res,200,files);
         }
+        if(action==='preview'&&req.method==='GET')return json(res,200,await previewArtifact(task.workspace,url.searchParams.get('path')||''));
         if(action==='file'&&req.method==='GET'){
           const name=url.searchParams.get('path')||'',p=await safePath(task.workspace,name),stat=await fs.stat(p);if(!stat.isFile()||stat.size>20_000_000)throw new Error('成果无效或超过 20 MB');
           const bytes=await fs.readFile(p);res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(path.basename(p))}`);res.end(bytes);return;
@@ -151,7 +165,7 @@ const server=http.createServer(async(req,res)=>{
     if(req.method!=='GET')return json(res,405,{error:'方法不支持'});
     const rel=url.pathname==='/'?'index.html':decodeURIComponent(url.pathname).slice(1);
     const p=await safePath(path.join(config.root,'dist'),rel);
-    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
+    res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'");
     res.setHeader('Content-Type',types[path.extname(p)]||'application/octet-stream');res.end(await fs.readFile(p));
   }catch(e){if(!res.headersSent)json(res,400,{error:errorText(e)});else res.end();}
 });

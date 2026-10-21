@@ -1,6 +1,6 @@
 # 本地 Agent 工作台
 
-把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen，查看计划、工具执行、结果检查与生成文件。v0.4 默认由后端协调 Qwen 规划、DeepSeek 执行、Codex 独立核验；问候走无工具快捷对话。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md)。
+把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen。普通问答直接回复；需要文件、联网或本机操作的任务，默认由后端协调 Qwen 规划、DeepSeek 执行、Codex 独立核验。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md) 和 [聊天与性能验收](CHAT-PERFORMANCE.md)。
 
 发布网页：[GitHub Pages](https://x39056616-cyber.github.io/local-agent-workbench/)；源码：[local-agent-workbench](https://github.com/x39056616-cyber/local-agent-workbench)。部署与配对步骤见 [DEPLOY.md](DEPLOY.md)。
 
@@ -9,7 +9,7 @@
 1. 双击 **启动工作台.cmd** 或原有桌面快捷方式，浏览器打开 <http://127.0.0.1:4317>；本地 Qwen 同时在后台准备。
 2. 选择自动协作或一个执行器，描述任务，可附加最多 5 个文件（每个不超过 5 MB）。
 3. 工作目录留空时，在 `data/tasks/` 创建独立目录；也可以明确选择一个已有目录。
-4. 右侧显示计划和成果文件。任务停止或失败后，可检查已有文件，再填写补充要求并点击“继续任务”。
+4. 回复直接显示在对话中，继续输入可追问。生成文件在同一对话显示预览与下载；技术日志默认折叠，右侧保留任务概览。停止或失败后，检查已有文件，再补充要求或点击“继续任务”。
 5. 双击 **停止工作台.cmd** 结束本项目进程。已有 LM Studio/Bionic 和其他桌面应用保持运行。
 
 本机已安装 Node.js 24。依赖和网页已经构建；搬到其他位置后，启动脚本会在依赖缺失时运行 `npm ci`，需要访问 npm。
