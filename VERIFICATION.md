@@ -41,3 +41,5 @@
 - DeepSeek Pro / off 已通过真实 Harness 请求。8 档来源为本机已安装的模型目录，界面说明后端映射。API Key 模式完成本地协议服务及真实 Windows 加密验证，未使用用户开发者 API 账号做付费联调。
 - Playwright：网页提交快捷对话、SSE 正文、归档和取消归档、API 密钥密码框、Flash/Pro 模型与 8 档、默认三模型配置，以及 1440/820/390 无横向溢出通过，页面错误为 0。人工检查截图后修正了手机 API 表单标签换行。
 - 原始证据位于忽略的 acceptance/optimization.json、pro-model.json、browser-optimization.json 与对应截图；没有公开用户任务日志、凭据或 API 密钥。
+
+- 归档入口补充：左侧历史记录增加独立归档图标，支持键盘与屏幕阅读器名称；真实浏览器验证直接归档、取消归档及保留原事件通过，页面错误为 0。证据：忽略的 acceptance/archive-button.json。
