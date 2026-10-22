@@ -44,7 +44,7 @@ test('修订修改文件后续接，恢复原审查输入而不重放执行',asy
   }else{executions++;await ctx.tool('write_file',{path:'result.md',content:executions===1?'初稿':'修订完成'},e);await ctx.tool('finish_task',{outcome:'completed',summary:'用户可读答案',files:['result.md']},e);}
   return '';
  }};
- const w=validateWorkflow(undefined,'auto'),runner=new Workflows(engines,s,()=>{});
+ const w=validateWorkflow({mode:'balanced'},'auto'),runner=new Workflows(engines,s,()=>{});
  await assert.rejects(runner.run('原任务',c,w),/模拟审查中断/);assert.equal(executions,2);
  await runner.run('原任务',c,w);assert.equal(executions,2);assert.equal(await readFile(path.join(c.task.workspace,'result.md'),'utf8'),'修订完成');
  assert(s.events(c.task.id).some(e=>e.type==='stage_reused'&&e.data.reason?.includes('原始审查')));
@@ -59,7 +59,7 @@ test('自动模式只读研究失败可移交 Harness，显式 Qwen 保持原错
   else await ctx.tool('finish_task',{outcome:'completed',summary:'直接交付答案',files:[]},e);
   return '';
  }};
- await new Workflows(engines,s,()=>{}).run('原任务',c,validateWorkflow(undefined,'auto'));
+ await new Workflows(engines,s,()=>{}).run('原任务',c,validateWorkflow({mode:'balanced'},'auto'));
  assert(calls.includes('harness:balanced.plan'));assert(s.events(c.task.id).some(e=>e.type==='research_fallback'&&e.data.to==='harness'));assert(s.events(c.task.id).some(e=>e.type==='stage_done'&&e.data.id==='balanced.plan'&&e.engine==='harness'));
  c.task.engine='qwen';const w=validateWorkflow({mode:'balanced'},'qwen');await assert.rejects(new Workflows(engines,s,()=>{}).run('不同任务',c,w),/Qwen 未使用工具/);
 }));
@@ -78,7 +78,7 @@ test('执行器退出后其他模型核对并修订已有文本，保存备份�
   }
   return '';
  }};
- await new Workflows(engines,s,()=>{}).run(c.task.prompt,c,validateWorkflow(undefined,'auto'));assert(replacement);
+ await new Workflows(engines,s,()=>{}).run(c.task.prompt,c,validateWorkflow({mode:'balanced'},'auto'));assert(replacement);
  const events=s.events(c.task.id),backup=events.find(e=>e.type==='recovery_backup');assert(backup);assert.equal(await readFile(path.join(c.task.workspace,backup.data.backup),'utf8'),'尚未完成的草稿');
  assert(events.some(e=>e.type==='subagent_done'&&e.engine==='qwen'));assert(events.some(e=>e.type==='completion'&&e.engine==='system'));
 }));
@@ -93,7 +93,7 @@ test('核验模型离线时更换独立模型，接管者必须重新读取成�
    await ctx.tool('read_file',{path:'result.md'},e);independentRead=true;await ctx.tool('submit_stage',{payload:JSON.stringify(value)},e);
   }else {await ctx.tool('write_file',{path:'result.md',content:'成果'},e);await ctx.tool('finish_task',{outcome:'completed',summary:'成果',files:['result.md']},e);}return '';
  }};
- await new Workflows(engines,s,()=>{}).run('自包含任务',c,validateWorkflow(undefined,'auto'));assert(independentRead);
+ await new Workflows(engines,s,()=>{}).run('自包含任务',c,validateWorkflow({mode:'balanced'},'auto'));assert(independentRead);
  assert(s.events(c.task.id).some(e=>e.type==='auto_recovery'&&e.data.from==='codex'&&e.data.to==='qwen'));
 }));
 

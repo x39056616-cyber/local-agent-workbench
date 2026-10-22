@@ -52,7 +52,7 @@ test('研究员必须实际查阅，执行者收到来源；审查员必须读�
   }else{builderSawEvidence=prompt.includes('https://example.com/react')&&prompt.includes('ReAct combines');for(const file of ['one.md','two.md','unrelated.md'])await ctx.tool('write_file',{path:file,content:'真实单测成果'},e);await ctx.tool('finish_task',{outcome:'completed',summary:'两份摘要完成',files:['one.md','two.md']},e);}
   return '';
  }};
- await new Workflows(engines,s,()=>{}).run(c.task.prompt,c,validateWorkflow(undefined,'auto'));assert(builderSawEvidence);assert(s.events(c.task.id).some(e=>e.type==='research_evidence'&&e.data.sources.length===1));
+ await new Workflows(engines,s,()=>{}).run(c.task.prompt,c,validateWorkflow({mode:'balanced'},'auto'));assert(builderSawEvidence);assert(s.events(c.task.id).some(e=>e.type==='research_evidence'&&e.data.sources.length===1));
 }));
 test('原生任务不能只声称检索完成，历史轮次来源不能借用',async()=>fixture(async(s,t,c)=>{
  await assert.rejects(t.call(c,'finish_task',{outcome:'completed',summary:'查完了',files:[]},'qwen'),/尚无实际读取/);
@@ -68,7 +68,7 @@ test('反思审查必须读取成果，文件变化后不能复用旧审查结�
 test('升级导致执行方案变化时，均衡协作不能重放旧版已执行的子任务',async()=>fixture(async(s,t,c)=>{
  c.task.prompt='自包含计算';s.event(c.task.id,'subagent_start','harness',{id:'balanced.execute.0',key:'old-version'});s.event(c.task.id,'subagent_done','harness',{id:'balanced.execute.0',key:'old-version',result:{summary:'旧操作已完成',files:[]}});let executions=0;
  const engine:any={run:async(_e:string,_p:string,ctx:any)=>{if(ctx.stage)await ctx.tool('submit_stage',{payload:JSON.stringify({summary:'新计划',steps:['执行']})},'qwen');else executions++;return '';}};
- await assert.rejects(new Workflows(engine,s,()=>{}).run('自包含计算',c,validateWorkflow(undefined,'auto')),/避免升级或重新规划后重复副作用/);assert.equal(executions,0);
+ await assert.rejects(new Workflows(engine,s,()=>{}).run('自包含计算',c,validateWorkflow({mode:'balanced'},'auto')),/避免升级或重新规划后重复副作用/);assert.equal(executions,0);
 }));
 test('ReAct 旧版动作没有新序号时，改变决定不能重放副作用',async()=>fixture(async(s,t,c)=>{
  c.task.prompt='自包含任务';s.event(c.task.id,'action','qwen',{id:'react',key:'old-action',action:'write_file'});let actions=0;

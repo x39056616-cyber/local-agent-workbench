@@ -17,7 +17,7 @@ test('问候仅走快捷对话，含执行要求的文字、显式工具机制�
  assert(isGreeting('你好！'));assert(isGreeting('你是谁'));assert(!isGreeting('你好，帮我删除文件'));
  assert.equal(taskRoute({prompt:'你好',engine:'auto'}).engine,'qwen');assert.equal(taskRoute({prompt:'你好',engine:'codex'}).engine,'codex');
  assert.equal(taskRoute({prompt:'你好',engine:'auto',options:JSON.stringify({intent:'task'})}).kind,'task');assert.equal(taskRoute({prompt:'你好',engine:'auto',options:JSON.stringify({workflow:{mode:'react'}})}).kind,'task');
- assert.equal(validateWorkflow(undefined,'auto').mode,'balanced');assert.equal(validateWorkflow(undefined,'qwen').mode,'native');
+ assert.equal(validateWorkflow(undefined,'auto').mode,'adaptive');assert.equal(validateWorkflow({mode:'balanced'},'auto').mode,'balanced');assert.equal(validateWorkflow(undefined,'qwen').mode,'native');
 });
 test('归档保留任务与事件，重启后仍可恢复，活动任务不能归档',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-archive-'));let s=new Store(dir);try{const t=s.create('任务','qwen',dir);s.event(t.id,'message','qwen',{text:'保留'});assert.throws(()=>s.archive(t.id,true),/停止/);s.update(t.id,{status:'succeeded'});s.archive(t.id,true);s.close();s=new Store(dir);assert.equal(s.get(t.id)?.archived,1);assert.equal(s.events(t.id).length,1);s.archive(t.id,false);assert.equal(s.get(t.id)?.archived,0);}finally{s.close();await rm(dir,{recursive:true,force:true});}
@@ -25,7 +25,7 @@ test('归档保留任务与事件，重启后仍可恢复，活动任务不能�
 test('均衡模式由后端分别调用规划、执行、核验，并把核验问题交给原执行者修订',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-balanced-')),s=new Store(dir),t=new Tools(s),task=s.create('制作文件','auto',dir),events:any[]=[];const ctx:any={task,signal:new AbortController().signal,emit:(type:string,engine:string,data:any)=>{s.event(task.id,type,engine,data);events.push({type,engine,data});},tool:(n:string,a:any,e:string)=>t.call(ctx,n,a,e)};
  let reviews=0;const called:string[]=[];const engine:any={run:async(e:string,prompt:string,c:any)=>{called.push(e);if(c.stage?.id==='balanced.plan')await c.tool('submit_stage',{payload:JSON.stringify({summary:'事实',steps:['写文件并校验']})},e);else if(c.stage){await c.tool('read_file',{path:'out.md'},e);reviews++;await c.tool('submit_stage',{payload:JSON.stringify({passed:reviews===2,summary:'独立核验',issues:reviews===2?[]:['需补充证据'],files:['out.md']})},e);}else{await c.tool('write_file',{path:'out.md',content:reviews?'已补证据':'初稿'},e);await c.tool('finish_task',{outcome:'completed',summary:'交付',files:['out.md']},e);}return '';}};
- try{await new Workflows(engine,s,()=>{}).run('制作文件',ctx,validateWorkflow(undefined,'auto'));assert.deepEqual(called,['qwen','harness','codex','harness','codex']);assert.equal(events.filter(e=>e.type==='completion').length,1);assert.equal(await readFile(path.join(dir,'out.md'),'utf8'),'已补证据');}finally{s.close();await rm(dir,{recursive:true,force:true});}
+ try{await new Workflows(engine,s,()=>{}).run('制作文件',ctx,validateWorkflow({mode:'balanced'},'auto'));assert.deepEqual(called,['qwen','harness','codex','harness','codex']);assert.equal(events.filter(e=>e.type==='completion').length,1);assert.equal(await readFile(path.join(dir,'out.md'),'utf8'),'已补证据');}finally{s.close();await rm(dir,{recursive:true,force:true});}
 });
 test('DeepSeek 强度显式映射，不虚构 8 个不同的后端推理深度',()=>{assert.deepEqual(deepseekThinking('off'),{thinking:{type:'disabled'}});assert.equal(deepseekThinking('medium').reasoning_effort,'high');assert.equal(deepseekThinking('ultra').reasoning_effort,'max');assert.throws(()=>deepseekThinking('unlimited'));});
 test('流式正文正确跨分片解析，不把 reasoning_content 发到网页',async()=>{

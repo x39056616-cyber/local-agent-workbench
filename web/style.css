@@ -4,6 +4,17 @@
 
 :root{font-family:'IBM Plex Sans','Microsoft YaHei','Segoe UI',sans-serif;font-synthesis:none;color:#131416;background:#f1f4f6;--ground:#f1f4f6;--paper:#fff;--surface:#fff;--line:#e8eaec;--muted:#62686d;--green:#1b6c80;--text:#131416;--accent:#1b6c80;--control:#cdced1;--gap:24px;font-size:14px;font-variant-numeric:tabular-nums}
 
+.model-routing{margin:16px 0 24px;padding:14px 0;border-block:1px solid var(--line);font-size:13px;overflow-wrap:anywhere}
+.model-routing-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px 16px}
+.model-routing-heading span,.model-routing summary,.routing-candidates span{color:var(--muted)}
+.model-routing p{margin:8px 0;max-width:72ch}
+.model-routing details{margin-top:8px}.model-routing summary{cursor:pointer;min-height:28px}
+.routing-candidates>div{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.routing-feedback{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}
+.routing-feedback button{border:1px solid var(--control);border-radius:6px;padding:7px 10px;min-height:36px}
+.routing-feedback button:hover,.routing-feedback button[aria-pressed=true]{color:var(--accent);background:#edf5f7;border-color:var(--accent)}
+.intent-picker small{display:block;color:var(--muted);font-weight:400;line-height:1.7;margin-top:6px;max-width:64ch}
+
 *{box-sizing:border-box}
 body{margin:0}
 button,input,textarea,select{font:inherit;color:inherit}

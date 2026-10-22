@@ -1,13 +1,13 @@
 # 本地 Agent 工作台
 
-把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen。普通问答直接回复；需要文件、联网或本机操作的任务，默认由后端协调 Qwen 查阅资料和规划、DeepSeek 执行、Codex 独立核验。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。详见 [优化说明](OPTIMIZATION.md)、[聊天与性能验收](CHAT-PERFORMANCE.md) 和 [研究及执行链自查](RESEARCH-AUDIT.md)。
+把自然语言任务交给 Codex、DeepSeek Harness 或本地 Qwen。普通问答直接回复；需要文件、联网或本机操作的任务，默认按任务、相对成本和本机反馈选择执行器：常规任务优先 DeepSeek，本地整理考虑 Qwen，复杂工程倾向 Codex。支持本地向量检索、桌面连接器、模型强度、API 接入、任务归档和 GitHub Pages 配对网页。选模理由与评价见 [智能选模](MODEL-ROUTING.md)。详见 [优化说明](OPTIMIZATION.md)、[聊天与性能验收](CHAT-PERFORMANCE.md) 和 [研究及执行链自查](RESEARCH-AUDIT.md)。
 
 发布网页：[GitHub Pages](https://x39056616-cyber.github.io/local-agent-workbench/)；源码：[local-agent-workbench](https://github.com/x39056616-cyber/local-agent-workbench)。部署与配对步骤见 [DEPLOY.md](DEPLOY.md)。
 
 ## 使用
 
 1. 双击 **启动工作台.cmd** 或原有桌面快捷方式，浏览器打开 <http://127.0.0.1:4317>；本地 Qwen 同时在后台准备。
-2. 选择自动协作或一个执行器，描述任务，可附加最多 5 个文件（每个不超过 5 MB）。
+2. 选择智能选模或一个执行器，描述任务，可附加最多 5 个文件（每个不超过 5 MB）。
 3. 工作目录留空时，在 `data/tasks/` 创建独立目录；也可以明确选择一个已有目录。
 4. 回复直接显示在对话中，继续输入可追问。生成文件在同一对话显示预览与下载；技术日志默认折叠，右侧保留任务概览。停止或失败后，检查已有文件，再补充要求或点击“继续任务”。
 5. 双击 **停止工作台.cmd** 结束本项目进程。已有 LM Studio/Bionic 和其他桌面应用保持运行。
@@ -31,7 +31,7 @@ Codex 和 Harness 可沿用各自已有账号。DeepSeek 也可在本机「运�
 | 图中的模块 | 当前实现 |
 | --- | --- |
 | 感知—行动—观察循环 | Qwen 原生 tool_calls 循环；Codex、Harness 复用原生 Agent Loop |
-| 大脑与规划 | 系统指令、结构化工具、显式计划、自动模式的一级委派 |
+| 大脑与规划 | 系统指令、结构化工具、显式计划、任务选模与受限接管 |
 | 工作记忆 | 引擎当前消息、工具结果、任务事件、继续任务时的检查点摘要 |
 | 长期记忆 | 用户主动添加/删除的事实与偏好，768 维向量与全文混合检索 |
 | 工具注册 | 统一工具目录、类型/枚举/范围校验、超时、预算、错误回传 |
@@ -45,7 +45,7 @@ Codex 和 Harness 可沿用各自已有账号。DeepSeek 也可在本机「运�
 
 ## 工具与执行边界
 
-内置工具：`plan_update`、`list_files`、`read_file`、`write_file`、`search_files`、`fetch_url`、`run_command`、`tools_search`、`skill_read`、`memory_search`、`knowledge_search`、`knowledge_index`、`desktop_search`、`desktop_call`、`finish_task`；自动模式另有 `delegate`。
+内置工具：`plan_update`、`list_files`、`read_file`、`write_file`、`search_files`、`fetch_url`、`run_command`、`tools_search`、`skill_read`、`memory_search`、`knowledge_search`、`knowledge_index`、`desktop_search`、`desktop_call`、`finish_task`。默认智能选模由后端直接派发，避免只有 Codex 拥有主控；显式协作机制仍按其角色分派。
 
 所有文件工具检查规范化路径与 junction/symlink。命令经 Codex 的 `workspaceWrite` 沙箱执行，网页显示确认；拒绝后不执行，不降级为无沙箱命令。共享工具调用预算可以在设置中调整；Codex/Harness 内部原生操作遵守各自运行时限制。
 
@@ -136,4 +136,4 @@ React、Vite、TypeScript、Undici 与其他依赖的许可证保留在对应 np
 
 ## 快捷对话、均衡协作、API 与归档（0.4）
 
-新任务默认均衡协作，分别交付规划记录、实际文件、独立核验记录。任务输入区可切换快捷对话或工具任务；侧栏可管理归档；运行设置支持 DeepSeek 桌面账号与开发者 API。使用、延迟实测和验证边界见 [OPTIMIZATION.md](OPTIMIZATION.md)。
+新任务现默认智能选模；固定三角色协作可在执行机制中选择，交付规划、成果与独立核验记录。任务输入区可切换快捷对话或工具任务；侧栏可管理归档；运行设置支持 DeepSeek 桌面账号与开发者 API。使用、延迟实测和验证边界见 [OPTIMIZATION.md](OPTIMIZATION.md)。

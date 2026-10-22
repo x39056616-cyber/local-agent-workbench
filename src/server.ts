@@ -14,6 +14,7 @@ import {isGreeting,taskRoute} from './routing.ts';
 import {startQwen,qwenStatus} from './runtime.ts';
 import {previewArtifact} from './artifacts.ts';
 import {maintenanceScope} from './maintenance-intent.ts';
+import {preference} from './model-policy.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -51,12 +52,12 @@ const server=http.createServer(async(req,res)=>{
     }
     if(url.pathname==='/api/session'&&req.method==='GET'&&!remote){
       res.setHeader('Set-Cookie',`la_session=${cookieToken}; HttpOnly; SameSite=Strict; Path=/`);
-      return json(res,200,{ready:true,version:'0.4.0',local:true,publishedUrl:config.publishedUrl,defaultWorkspace:path.join(config.data,'tasks'),profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
+      return json(res,200,{ready:true,version:'0.4.0',local:true,publishedUrl:config.publishedUrl,defaultWorkspace:path.join(config.data,'tasks'),profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)},routingPreference:store.setting('routingPreference','balanced')});
     }
     if(url.pathname.startsWith('/api/')){
       const cookies=String(req.headers.cookie||'').split(';').map(s=>s.trim());
       if(remote?!trustedRemote||!equal(req.headers.authorization||'','Bearer '+pairedToken):!cookies.some(c=>equal(c,'la_session='+cookieToken)))return json(res,401,{error:'本地会话或网页配对已失效，请从本机工作台重新连接'});
-      if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{ready:true,version:'0.4.0',local:false,publishedUrl:config.publishedUrl,profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)}});
+      if(url.pathname==='/api/session'&&req.method==='GET')return json(res,200,{ready:true,version:'0.4.0',local:false,publishedUrl:config.publishedUrl,profiles:store.setting('profiles',{}),settings:{timeoutMinutes:store.setting('timeoutMinutes',30),maxCalls:store.setting('maxCalls',30)},routingPreference:store.setting('routingPreference','balanced')});
       if(url.pathname==='/api/pair'&&req.method==='POST'){
         if(remote)return json(res,403,{error:'只能在本机工作台开启连接'});
         const target=new URL(config.publishedUrl);if(target.protocol!=='https:')throw new Error('发布地址必须使用 HTTPS');
@@ -90,10 +91,11 @@ const server=http.createServer(async(req,res)=>{
         const workflow=validateWorkflow(data.workflow,data.engine);
         const chat=taskRoute({prompt:data.prompt,engine:data.engine,hasAttachments:!!data.files?.length,options:JSON.stringify({intent:data.intent,workflow})}).kind==='chat';
         if(chat&&data.files?.length)throw new Error('带附件请使用工具任务类型，快捷对话不读取附件');
-        const requested=data.options??store.setting('profiles',{}),target=data.engine==='auto'?'qwen':data.engine;
-        const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
+        const routingPreference=preference(data.routingPreference??store.setting('routingPreference','balanced'));
+        const requested=data.options??store.setting('profiles',{}),target=taskRoute({prompt:data.prompt,engine:data.engine,options:JSON.stringify({routingPreference})}).engine;
+        const profiles=await validateProfiles(chat&&data.engine!=='auto'?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
         if(chat&&isGreeting(data.prompt)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
-        const taskOptions={...profiles,workflow,maintenance:maintenanceScope(data.prompt),intent:chat?'chat':'task',requestedIntent:data.intent||'auto',turnId:randomBytes(8).toString('hex')};
+        const taskOptions={...profiles,routingPreference,workflow,maintenance:maintenanceScope(data.prompt),intent:chat?'chat':'task',requestedIntent:data.intent||'auto',turnId:randomBytes(8).toString('hex')};
         if(data.files!==undefined&&(!Array.isArray(data.files)||data.files.length>5))throw new Error('最多上传 5 个附件');
         const uploads=(data.files||[]).map((file:any)=>{if(typeof file.name!=='string'||typeof file.base64!=='string')throw new Error('附件无效');const name=path.basename(file.name).replace(/[^\p{L}\p{N}._ -]/gu,'_');if(!name||['.','..'].includes(name))throw new Error('附件名称无效');const bytes=Buffer.from(file.base64,'base64');if(bytes.length>5_000_000)throw new Error('附件超过 5 MB');return {name,bytes};});
         if(data.workspace && !path.isAbsolute(data.workspace))throw new Error('任务目录必须是绝对路径');
@@ -119,6 +121,7 @@ const server=http.createServer(async(req,res)=>{
           const timer=setInterval(()=>res.write(': keepalive\n\n'),15000);
           req.on('close',()=>{clearInterval(timer);agent.removeListener('event',send);remoteStreams.delete(res);});return;
         }
+        if(action==='routing-feedback'&&req.method==='POST'){const d=await body(req),feedback=agent.router.feedback(task.id,d.decisionId,d.rating);agent.emitEvent(task.id,'routing_feedback','user',feedback);return json(res,200,feedback);}
         if(action==='archive'&&req.method==='POST'){const d=await body(req);if(typeof d.archived!=='boolean')throw new Error('归档参数无效');store.archive(task.id,d.archived);agent.emitEvent(task.id,'archived','user',{archived:d.archived});return json(res,200,store.get(task.id));}
         if(action==='cancel'&&req.method==='POST'){agent.cancel(task.id);return json(res,200,{ok:true});}
         if(action==='resume'&&req.method==='POST'){
@@ -133,10 +136,11 @@ const server=http.createServer(async(req,res)=>{
             const continuingFiles=prior.intent==='task'&&/继续|再改|改成|补充|优化|调整|再生成|这个文件|该文件|刚才的文件|上面的文件/.test(current);
             const maintenance=maintenanceScope(current,prior.maintenance===true);
             const workflow=validateWorkflow(input.workflow||prior.workflow,engine),chat=taskRoute({prompt:current,engine,hasAttachments:continuingFiles,options:JSON.stringify({intent:requestedIntent,workflow,maintenance})}).kind==='chat';
-            const target=engine==='auto'?'qwen':engine,requested=input.options||Object.fromEntries(['qwen','harness','codex'].filter(k=>prior[k]).map(k=>[k,prior[k]]));
-            const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
+            const routingPreference=preference(input.routingPreference??prior.routingPreference??store.setting('routingPreference','balanced'));
+            const target=taskRoute({prompt:current,engine,options:JSON.stringify({routingPreference})}).engine,requested=input.options||Object.fromEntries(['qwen','harness','codex'].filter(k=>prior[k]).map(k=>[k,prior[k]]));
+            const profiles=await validateProfiles(chat&&engine!=='auto'?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
             if(chat&&isGreeting(current)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
-            const next={...prior,...profiles,workflow,maintenance,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
+            const next={...prior,...profiles,routingPreference,workflow,maintenance,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
             store.update(task.id,{status:'queued',error:'',result:'',engine,options:JSON.stringify(next)});
           }else {
             const reviews=store.events(task.id).filter(e=>e.type==='stage_done'&&/^balanced\.review\.\d+$/.test(e.data.id||'')&&e.data.value?.passed===false);

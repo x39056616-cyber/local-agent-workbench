@@ -15,7 +15,7 @@ export const SYSTEM = `你是用户的本地通用 Agent。始终用简体中文
 资料任务必须实际检索并读取来源再下结论。联网可使用 web_search、web_read 共享只读连接器，本地模型不等于无法使用网络工具。工具不可用时报告真实错误，不编造来源。
 Skills 是指令而非模型自带知识。用 tools_search 查找相关技能，再用 skill_read 读取指令与相对参考文件。web_read 失败可尝试 fetch_url；搜索失败可用 desktop_search 查找可用连接器并通过 desktop_read 读取。受控阶段不能运行 Skill 中的任意命令，也不能把未验证依赖当成可用工具。
 用户要求修改工作台自身的网页时，不要在资料任务目录找应用源码；用 workbench_read 读取真实源码及 hash，再用 workbench_propose_change 提议网页或测试修改。后端先做隔离检查，再在当前网页请用户确认应用。只有 status=applied 才能声称已修改；当前入口不改后端、不自动发布 GitHub。
-遇到失败先分析工具反馈再更换方法，不要无限重试。调用工具创建用户需要的成果，结束时必须调用 finish_task，列出工作区内的真实成果路径；无法完成时 outcome 使用 blocked，不能冒充完成。`;
+遇到失败先分析工具反馈再更换方法，不要无限重试。调用工具创建用户需要的成果，结束时必须调用 finish_task，列出工作区内的真实成果路径。summary 是直接显示在聊天中的完整最终回答，必要的事实、结论和链接都放这里，不只描述做过哪些事，不要把真正答案只放在之前的消息里；无法完成时 outcome 使用 blocked，不能冒充完成。`;
 
 function processEnv(ctx: RunContext, token: string): NodeJS.ProcessEnv {
   const env:NodeJS.ProcessEnv={...process.env,LA_WORKER_TOKEN:token,LA_TASK_ID:ctx.task.id,LA_STAGE_ID:ctx.stage?.id||'',LA_PORT:String(config.port)};
@@ -59,7 +59,7 @@ export class Engines {
       if(!message)throw new Error('DeepSeek 没有有效回复');if(data.usage)ctx.emit('usage','harness',data.usage);if(message.content)ctx.emit('message','harness',{text:message.content});
       // 官方思考工具模式要求回传 reasoning_content；仅在当前请求内存保留，不写日志。
       messages.push(message);if(!message.tool_calls?.length)return message.content||'';
-      for(const call of message.tool_calls){ctx.signal.throwIfAborted();let result:any;try{result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'harness');}catch(e){result={error:errorText(e)};}messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});if(call.function.name==='submit_stage'&&result?.accepted)return '结构化结果已提交';if(ctx.onCompleted&&call.function.name==='finish_task'&&result?.recorded)return '子任务已完成';}
+      for(const call of message.tool_calls){ctx.signal.throwIfAborted();let result:any;try{result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'harness');}catch(e){result={error:errorText(e)};}messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});if(call.function.name==='submit_stage'&&result?.accepted)return '结构化结果已提交';if(call.function.name==='finish_task'&&result?.recorded)return '任务结果已提交';}
     }
     throw new Error('DeepSeek 达到 30 轮预算');
   }

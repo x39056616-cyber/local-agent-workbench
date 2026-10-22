@@ -58,7 +58,7 @@ test('均衡协作维护时，审查员必须读取全部实际改动源码，�
   else if(ctx.stage){const value={passed:true,summary:'已核对实际源码',issues:[],files:[report]};await ctx.tool('read_file',{path:report},e);await assert.rejects(ctx.tool('submit_stage',{payload:JSON.stringify(value)},e),/全部应用后的改动源码/);await ctx.tool('workbench_read',{path:'package.json'},e);await assert.rejects(ctx.tool('submit_stage',{payload:JSON.stringify(value)},e),/无关文件/);await ctx.tool('workbench_read',{path:'web/a.tsx'},e);await ctx.tool('submit_stage',{payload:JSON.stringify(value)},e);}
   else {const before=await ctx.tool('workbench_read',{path:'web/a.tsx'},e),r=await ctx.tool('workbench_propose_change',{summary:'修复本工作台界面',changes:[{path:'web/a.tsx',beforeHash:before.hash,content:'after'}]},e);assert.equal(r.status,'applied');report=r.report;await ctx.tool('finish_task',{outcome:'completed',summary:'已应用网页改动',files:[report]},e);}return '';
  }};
- await new Workflows(engines,tools.store,()=>{}).run(c.task.prompt,c,validateWorkflow(undefined,'auto'));
+ await new Workflows(engines,tools.store,()=>{}).run(c.task.prompt,c,validateWorkflow({mode:'balanced'},'auto'));
  assert(tools.store.events(c.task.id).some(e=>e.type==='completion'&&e.engine==='system'));
 }));
 test('等待审批期间其他源码或配置变化也必须重新验证，不能部署陈旧网页包',async()=>fixture(async(m,c,root)=>{

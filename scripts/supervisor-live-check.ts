@@ -38,7 +38,7 @@ try{
   if(engine==='harness'&&!scoped.stage){await scoped.tool('write_file',{path:'result.md',content:'尚未完成的草稿'},engine);ctx.emit('fault_fixture','system',{kind:'injected-executor-exit'});throw new Error('Harness 进程退出（验收注入）');}
   return real.run(engine,prompt,scoped,delegate);
  }};
- const result=await new Workflows(injected as Engines,store,c=>{active=c;}).run(task.prompt,ctx,validateWorkflow(undefined,'auto'));
+ const result=await new Workflows(injected as Engines,store,c=>{active=c;}).run(task.prompt,ctx,validateWorkflow({mode:'balanced'},'auto'));
  const events=store.events(task.id);assert(events.some(e=>e.type==='auto_recovery'&&e.data.from==='harness'&&e.data.to==='qwen'));
  assert(events.some(e=>e.type==='tool_done'&&e.engine==='qwen'&&e.data.name==='write_file'));
  assert(events.some(e=>e.type==='tool_done'&&e.engine==='codex'&&e.data.name==='read_file'));

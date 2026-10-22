@@ -6,17 +6,17 @@ import {toolSpecs,safePath} from './tools.ts';
 import {stat,mkdir,writeFile,readFile} from 'node:fs/promises';
 import path from 'node:path';
 import {EvidenceLedger} from './evidence.ts';
-import {researchKinds,requiresFileDelivery} from './routing.ts';
+import {researchKinds,requiresFileDelivery,taskRoute} from './routing.ts';
 import {Supervisor,recoveryTools} from './supervisor.ts';
 import {workbenchApplicationRequired} from './maintenance-intent.ts';
 
 export type Role={id:string;name:string;engine:'codex'|'harness'|'qwen';instructions:string};
-export type Workflow={mode:'native'|'balanced'|'react'|'plan'|'reflection'|'team';maxSteps:number;maxRevisions:number;roles:Role[]};
-export const workflowModes={native:'原生引擎',balanced:'均衡多模型协作',react:'ReAct 工具循环',plan:'规划求解',reflection:'反思与修订',team:'角色协作'};
+export type Workflow={mode:'adaptive'|'native'|'balanced'|'react'|'plan'|'reflection'|'team';maxSteps:number;maxRevisions:number;roles:Role[]};
+export const workflowModes={adaptive:'按任务智能选模',native:'原生引擎',balanced:'固定三角色协作',react:'ReAct 工具循环',plan:'规划求解',reflection:'反思与修订',team:'角色协作'};
 export function validateWorkflow(value:any,engine:string):Workflow {
   const v=value??{};
   if(typeof v!=='object'||Array.isArray(v))throw new Error('执行机制配置无效');
-  const mode=v.mode??(engine==='auto'?'balanced':'native'),maxSteps=v.maxSteps??20,maxRevisions=v.maxRevisions??1;
+  const mode=v.mode??(engine==='auto'?'adaptive':'native'),maxSteps=v.maxSteps??20,maxRevisions=v.maxRevisions??1;
   if(!Object.hasOwn(workflowModes,mode)||!Number.isInteger(maxSteps)||maxSteps<1||maxSteps>30||!Number.isInteger(maxRevisions)||maxRevisions<0||maxRevisions>3)throw new Error('执行机制或阶段预算无效');
   const selected=engine==='auto'?'codex':engine;
   const roles=v.roles??[{id:'researcher',name:'资料研究员',engine:engine==='auto'?'qwen':selected,instructions:'通过只读工具实际查阅资料，提取事实并核对出处。'},{id:'builder',name:'执行者',engine:engine==='auto'?'harness':selected,instructions:'完成独立分析、编写成果并验证。'},{id:'reviewer',name:'审查员',engine:selected,instructions:'核对目标、事实和成果，指出可验证的问题。'}];
@@ -40,13 +40,13 @@ export const stageSpec={name:'submit_stage',description:'提交当前阶段的�
 export class Workflows {
   engines:Engines; store:Store; activate:(ctx:RunContext)=>void;
   constructor(engines:Engines,store:Store,activate:(ctx:RunContext)=>void){this.engines=engines;this.store=store;this.activate=activate;}
-  async run(prompt:string,ctx:RunContext,w:Workflow):Promise<string>{
-    const root=ctx.task.engine==='auto'?'codex':ctx.task.engine;
+  async run(prompt:string,ctx:RunContext,w:Workflow,selectedRoot?:string):Promise<string>{
+    const root=selectedRoot||taskRoute(ctx.task).engine;
     const maintenanceOptions=JSON.parse(ctx.task.options||'{}'),maintenanceRequest=workbenchApplicationRequired(maintenanceOptions.currentPrompt||ctx.task.prompt,maintenanceOptions.maintenance===true);
     const turn=JSON.parse(ctx.task.options||'{}').turnId,taskKey=turn?ctx.task.prompt+'\n'+turn:ctx.task.prompt;
     const turnEvents=()=>{const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');return events.slice(last<0?0:last);};
     const supervisor=new Supervisor(this.store,ctx);
-    if(w.mode==='native')return this.engines.run(root,prompt,ctx);
+    if(w.mode==='native'||w.mode==='adaptive')return this.engines.run(root,prompt,ctx,true);
     let stages=0;
     const stage=async(id:string,engine:string,instruction:string,validate:(v:any,ledger:EvidenceLedger)=>any,allowRead=false,requireRead:boolean|string[]=false)=>{
       ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('已达到机制阶段上限，检查点已保存');
