@@ -1,10 +1,12 @@
 // 路由不额外请求模型。问答直接回复，外部操作才进入工具循环。
+import {requestsWorkbenchChange} from './maintenance-intent.ts';
 export function isGreeting(prompt:string){
  const p=prompt.replace(/[\s\p{P}\p{S}]/gu,'').replace(/请问|请|以及|还有|并且/gu,'');
  return /^(?:(?:你好|您好|嗨|哈喽|hello|hi|hey|你是谁|你叫什么名字|你叫什么|介绍一下你自己|介绍下你自己|自我介绍|你能做什么|你可以做什么|谢谢你|谢谢|早上好|晚上好|在吗))+$/i.test(p);
 }
 // 只约束明确要求查阅外部资料的任务，普通解释与自包含计算不强制检索。
 export function researchKinds(prompt:string):('web'|'local')[]{
+ if(requestsWorkbenchChange(prompt))return [];
  const text=prompt.replace(/```[\s\S]*?```/g,'').replace(/(?:不(?:需要|要|用)?|无需|禁止|不得|不允许)(?:(?:运行|执行)命令[或和、])?(?:联网|上网|搜索)/g,'');
  const explain=/^(?:请问[，,\s]*)?(?:请|帮我)?(?:解释|讲解|介绍|比较|什么是|为什么|如何|怎么|what\b|why\b|how\b|explain\b|compare\b)/i.test(text)&&!/(?:帮我|替我|现在|实际|直接|然后|并且?|同时)(?:去)?(?:查找|查阅|查|搜|检索|读取|联网)/.test(text);
  const urls=/https?:\/\//i.test(text),local=/(?:读取|查找|查阅|查询|检索|搜索|分析|总结|根据|从)[\s\S]{0,100}(?:本地|知识库|资料库|附件|文件|目录|仓库)|(?:知识库|资料库|附件)[\s\S]{0,40}(?:查|搜|检索|总结)|附件文件：/.test(text);
@@ -20,6 +22,7 @@ export function requiresFileDelivery(prompt:string){
  return false;
 }
 export function requiresTools(prompt:string){
+ if(requestsWorkbenchChange(prompt))return true;
  const text=prompt.replace(/```[\s\S]*?```/g,'').trim();
  if(researchKinds(prompt).length)return true;
  if(/^(?:请问[，,\s]*)?(?:请|帮我)?(?:解释|讲解|介绍|比较|分析这段|什么是|为什么|如何|怎么|what\b|why\b|how\b|explain\b|compare\b)/i.test(text)&&!/(?:请|帮我|替我|现在|实际|直接|然后|并且?|同时)(?:在本机)?(?:运行|执行|修改|读取|创建|保存|部署|联网|搜索)/.test(text))return false;
@@ -33,7 +36,7 @@ export function requiresTools(prompt:string){
 }
 export function taskRoute(task:{prompt:string;engine:string;options?:string;hasAttachments?:boolean}){
  const options=JSON.parse(task.options||'{}'),mode=options.workflow?.mode||'balanced',prompt=options.currentPrompt||task.prompt;
- const chat=options.intent==='chat'||options.intent!=='task'&&!task.hasAttachments&&!['react','plan','reflection','team'].includes(mode)&&!requiresTools(prompt);
+ const chat=options.intent==='chat'||options.intent!=='task'&&!options.maintenance&&!task.hasAttachments&&!['react','plan','reflection','team'].includes(mode)&&!requiresTools(prompt);
  if(chat)return {kind:'chat',engine:task.engine==='auto'?'qwen':task.engine,reason:'普通对话直接请求所选模型，不规划、不检索、不生成文件'};
  return {kind:'task',engine:task.engine==='auto'?'codex':task.engine,reason:mode==='balanced'?'工具任务：Qwen 研究 → DeepSeek 执行 → Codex 核验':'按所选引擎和机制执行工具任务'};
 }

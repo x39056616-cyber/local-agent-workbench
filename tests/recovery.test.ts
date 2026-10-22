@@ -109,3 +109,9 @@ test('权限拒绝、结果不明与原生命令不能自动移交，接管次�
  s.event(c.task.id,'user_message','user',{text:'新一轮任务'});c.task.engine='qwen';assert(!new Supervisor(s,c).handoff('new','qwen','harness',new Error('引擎退出'),[],true));
  c.task.engine='auto';const aborted={...c,signal:AbortSignal.abort()};assert(!new Supervisor(s,aborted).handoff('aborted','qwen','harness',new Error('引擎退出'),[],true));
 }));
+test('工具预算按用户新一轮任务计算，重复续接或应用重启不清零',async()=>fixture(async(s,t,c)=>{
+ s.setSetting('maxCalls',1);c.task.options=JSON.stringify({turnId:'one'});s.event(c.task.id,'user_message','user',{turnId:'one',text:'第一轮'});
+ await t.call(c,'list_files',{},'qwen');await assert.rejects(t.call(c,'list_files',{},'qwen'),/预算/);
+ c.task.options=JSON.stringify({turnId:'two'});s.event(c.task.id,'user_message','user',{turnId:'two',text:'第二轮新请求'});await t.call(c,'list_files',{},'qwen');
+ await assert.rejects(new Tools(s).call(c,'list_files',{},'qwen'),/预算/);
+}));

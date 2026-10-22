@@ -13,6 +13,7 @@ import {Evaluation,evaluationExamples} from './evaluation.ts';
 import {isGreeting,taskRoute} from './routing.ts';
 import {startQwen,qwenStatus} from './runtime.ts';
 import {previewArtifact} from './artifacts.ts';
+import {maintenanceScope} from './maintenance-intent.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -92,7 +93,7 @@ const server=http.createServer(async(req,res)=>{
         const requested=data.options??store.setting('profiles',{}),target=data.engine==='auto'?'qwen':data.engine;
         const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
         if(chat&&isGreeting(data.prompt)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
-        const taskOptions={...profiles,workflow,intent:chat?'chat':'task',requestedIntent:data.intent||'auto',turnId:randomBytes(8).toString('hex')};
+        const taskOptions={...profiles,workflow,maintenance:maintenanceScope(data.prompt),intent:chat?'chat':'task',requestedIntent:data.intent||'auto',turnId:randomBytes(8).toString('hex')};
         if(data.files!==undefined&&(!Array.isArray(data.files)||data.files.length>5))throw new Error('最多上传 5 个附件');
         const uploads=(data.files||[]).map((file:any)=>{if(typeof file.name!=='string'||typeof file.base64!=='string')throw new Error('附件无效');const name=path.basename(file.name).replace(/[^\p{L}\p{N}._ -]/gu,'_');if(!name||['.','..'].includes(name))throw new Error('附件名称无效');const bytes=Buffer.from(file.base64,'base64');if(bytes.length>5_000_000)throw new Error('附件超过 5 MB');return {name,bytes};});
         if(data.workspace && !path.isAbsolute(data.workspace))throw new Error('任务目录必须是绝对路径');
@@ -130,11 +131,12 @@ const server=http.createServer(async(req,res)=>{
             const engine=input.engine||task.engine;if(!['auto','qwen','harness','codex'].includes(engine))throw new Error('执行器无效');
             const requestedIntent=input.intent||prior.requestedIntent||'auto';if(!['auto','chat','task'].includes(requestedIntent))throw new Error('任务类型无效');
             const continuingFiles=prior.intent==='task'&&/继续|再改|改成|补充|优化|调整|再生成|这个文件|该文件|刚才的文件|上面的文件/.test(current);
-            const workflow=validateWorkflow(input.workflow||prior.workflow,engine),chat=taskRoute({prompt:current,engine,hasAttachments:continuingFiles,options:JSON.stringify({intent:requestedIntent,workflow})}).kind==='chat';
+            const maintenance=maintenanceScope(current,prior.maintenance===true);
+            const workflow=validateWorkflow(input.workflow||prior.workflow,engine),chat=taskRoute({prompt:current,engine,hasAttachments:continuingFiles,options:JSON.stringify({intent:requestedIntent,workflow,maintenance})}).kind==='chat';
             const target=engine==='auto'?'qwen':engine,requested=input.options||Object.fromEntries(['qwen','harness','codex'].filter(k=>prior[k]).map(k=>[k,prior[k]]));
             const profiles=await validateProfiles(chat?(requested[target]?{[target]:requested[target]}:{}):requested,agent.tools.desktop);
             if(chat&&isGreeting(current)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
-            const next={...prior,...profiles,workflow,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
+            const next={...prior,...profiles,workflow,maintenance,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
             store.update(task.id,{status:'queued',error:'',result:'',engine,options:JSON.stringify(next)});
           }else {
             const reviews=store.events(task.id).filter(e=>e.type==='stage_done'&&/^balanced\.review\.\d+$/.test(e.data.id||'')&&e.data.value?.passed===false);

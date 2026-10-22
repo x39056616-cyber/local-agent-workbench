@@ -14,6 +14,8 @@ import { Retrieval } from './retrieval.ts';
 import { Desktop } from './desktop.ts';
 import {taskEvidence} from './evidence.ts';
 import {requiresFileDelivery} from './routing.ts';
+import {Maintenance,requestsWorkbenchChange} from './maintenance.ts';
+import {workbenchApplicationRequired} from './maintenance-intent.ts';
 
 const str=(description:string)=>({type:'string',description});
 const spec=(name:string,description:string,properties:any,required:string[]=[])=>({name,description,parameters:{type:'object',properties,required,additionalProperties:false}});
@@ -30,6 +32,8 @@ const specs=[
   spec('run_command','在 Codex 沙箱运行命令。首次需网页确认命令；不可用时不会降级到无沙箱执行。',{command:{type:'array',items:{type:'string'},minItems:1,maxItems:40},timeoutMs:{type:'integer',minimum:1000,maximum:120000}},['command']),
   spec('tools_search','搜索本机已发现的 Skills 目录与工具能力。发现不等于已验证可运行。',{query:str('用途或技能名称')},['query']),
   spec('skill_read','读取 Skill 指令或其目录内参考文件，相关工具需另外验证。',{id:str('tools_search 返回的技能 ID'),resource:str('可选的目录内相对路径，例如 references/search.md，默认 SKILL.md')},['id']),
+  spec('workbench_read','用户明确要求修改本工作台时，读取真实公开源码。省略 path 返回源码清单；不会读取账号或任务数据。',{path:str('项目内源码相对路径，例如 web/conversation.tsx'),offset:{type:'integer',minimum:0}}),
+  spec('workbench_propose_change','提议修改本工作台网页或对应测试。先 workbench_read 获取源码与 hash；后端隔离检查并生成改动报告，通过后在当前网页请求确认应用。本入口不改后端或发布 GitHub。',{summary:str('具体变更与用途'),changes:{type:'array',minItems:1,maxItems:8,items:{type:'object',properties:{path:str('web/ 或 tests/ 下的源码相对路径'),beforeHash:str('workbench_read 返回的 hash；新文件为 new'),content:str('修改后的完整源码')},required:['path','beforeHash','content'],additionalProperties:false}}},['summary','changes']),
   spec('memory_search','用向量与全文混合检索用户确认保存的长期记忆。',{query:str('自然语言查询，空值列出近期记忆')}),
   spec('knowledge_search','检索用户导入的知识库、长期记忆与本任务索引，返回来源和片段。',{query:str('自然语言问题')},['query']),
   spec('knowledge_index','为工作区内 UTF-8 文本建立本任务专属向量索引，不公开给其他任务。',{path:str('工作区文本相对路径')},['path']),
@@ -93,11 +97,12 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0):Pro
 
 export class Tools {
   store:Store; skills:any[]=[];
+  maintenance:Maintenance;
   retrieval:Retrieval; desktop:Desktop;
   delegate:(engine:string,prompt:string,ctx:RunContext)=>Promise<string>=async()=>{throw new Error('委派服务未初始化');};
   approval:(ctx:RunContext,action:string,detail:any)=>Promise<boolean>=async()=>false;
   counts=new Map<string,number>();
-  constructor(store:Store){this.store=store;this.retrieval=new Retrieval(store);this.desktop=new Desktop();}
+  constructor(store:Store){this.store=store;this.retrieval=new Retrieval(store);this.desktop=new Desktop();this.maintenance=new Maintenance();this.maintenance.approve=(ctx,action,detail)=>this.approval(ctx,action,detail);}
   async inventory(){
     const found:any[]=[];
     async function scan(dir:string,depth:number){if(depth>4)return;let entries;try{entries=await fs.readdir(dir,{withFileTypes:true});}catch{return;}
@@ -112,6 +117,7 @@ export class Tools {
     this.skills=found;return found;
   }
   skillHints(prompt:string){
+    if(requestsWorkbenchChange(prompt))return '用户在要求修改本工作台自身。网页源码在维护入口中，不在资料任务目录。先 workbench_read 读取清单和相关源码，再 workbench_propose_change 提议改动；隔离检查通过后会在本网页确认应用。不能只返回 HTML 示例或声称任务目录没有源码。修改范围为网页和测试，后端不在自动应用范围。';
     const queries=[...prompt.toLowerCase().matchAll(/github|联网|搜索|资料|网页|skill|技能/g)].map(m=>m[0]);
     if(!queries.length)return '';
     const related=this.skills.filter(s=>queries.some(q=>(s.name+' '+s.description).toLowerCase().includes(q))||queries.some(q=>['联网','搜索','网页','资料'].includes(q))&&s.name==='agent-reach').slice(0,3);
@@ -130,7 +136,8 @@ export class Tools {
       if(property.enum&&!property.enum.includes(value))throw new Error('参数不在允许的选项中：'+key);
       if(typeof value==='number'&&((property.minimum!==undefined&&value<property.minimum)||(property.maximum!==undefined&&value>property.maximum)))throw new Error('参数超出允许范围：'+key);
     }
-    const countKey=ctx.task.id+':'+engine,count=(this.counts.get(countKey)??this.store.events(ctx.task.id).filter(e=>e.type==='tool_start'&&e.engine===engine).length)+1;
+    const events=this.store.events(ctx.task.id),lastUser=events.findLastIndex(e=>e.type==='user_message'),turnId=JSON.parse(ctx.task.options||'{}').turnId||String(lastUser<0?'initial':events[lastUser].id);
+    const countKey=ctx.task.id+':'+turnId+':'+engine,count=(this.counts.get(countKey)??events.slice(lastUser<0?0:lastUser).filter(e=>e.type==='tool_start'&&e.engine===engine).length)+1;
     if(count>this.store.setting('maxCalls',30))throw new Error('已达到该执行器工具调用预算');this.counts.set(countKey,count);
     const id=randomUUID();
     this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?,?,?)').run(id,ctx.task.id,name,JSON.stringify(args),'running','',new Date().toISOString());
@@ -144,11 +151,13 @@ export class Tools {
   }
   async execute(ctx:RunContext,name:string,a:any,engine:string):Promise<any>{
     const userPrompt=(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt).replace(/```[\s\S]*?```/g,'');
+    if(requestsWorkbenchChange(userPrompt)&&name==='run_command')throw new Error('修改工作台网页请使用受控维护入口；不通过资料任务命令修改应用。隔离检查由后端维护服务执行。');
     if(name==='run_command'&&/(?:不要|不得|禁止|不能|不允许|无需|不(?:需要|用)?)(?:运行|执行|调用)(?:任何|系统|沙箱)?命令|do not (?:run|execute) (?:any )?commands/i.test(userPrompt))throw new Error('用户明确禁止运行命令，本任务不会发起命令审批或执行。');
     switch(name){
       case 'finish_task': {
         if(!['completed','blocked'].includes(a.outcome)||!Array.isArray(a.files)||a.files.some((f:any)=>typeof f!=='string'))throw new Error('完成声明格式错误');
         const prompt=JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt;
+        if(a.outcome==='completed'&&workbenchApplicationRequired(prompt,JSON.parse(ctx.task.options||'{}').maintenance===true)){const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');if(!events.slice(last<0?0:last).some(e=>e.type==='maintenance_applied'))throw new Error('用户要求修改工作台本身，但没有成功应用的维护记录。请使用 workbench_read 与 workbench_propose_change；只写任务目录文件不算修改应用，未应用应报告 blocked。');}
         if(a.outcome==='completed'&&requiresFileDelivery(prompt)&&!a.files.some((f:string)=>!/^\.?\/?(?:\.agent-reports\/|agent-result\.md$)/.test(f.replaceAll('\\','/'))))throw new Error('用户要求交付文件，请先实际创建或修改成果，再在 files 中声明用户成果；内部报告不能替代成果');
         if(a.outcome==='completed'&&!JSON.parse(ctx.task.options||'{}').evaluation)taskEvidence(this.store.events(ctx.task.id),ctx.task.workspace,JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);
         const files=[];for(const file of a.files){const p=await safePath(ctx.task.workspace,file),stat=await fs.stat(p);if(!stat.isFile())throw new Error('成果不是文件：'+file);files.push({path:path.relative(ctx.task.workspace,p),bytes:stat.size});}
@@ -169,6 +178,8 @@ export class Tools {
       case 'web_read': {const {u}=await publicAddress(a.url);try{return await this.desktop.web(ctx,{url:u.href,...(a.line!==undefined?{line:a.line}:{})});}catch(error){if(ctx.signal.aborted)throw error;ctx.emit('research_fallback',engine,{from:'desktop-web',to:'public-http',url:u.href,reason:errorText(error)});try{return {...await publicFetch(u.href,ctx.signal),backend:'public-http',note:'桌面阅读失败后的公开网页只读回退；不支持桌面行号分页'};}catch(fallback){throw new Error('桌面阅读失败：'+errorText(error)+'；公开网页读取也失败：'+errorText(fallback)+'。请用 tools_search 查询 agent-reach、skill_read 读取指令，或 desktop_search 查找其他只读连接器。');}}}
       case 'tools_search': {const queries=a.query.toLowerCase().split(/[\s,，/]+/).filter(Boolean);return {tools:toolSpecs(false).filter(s=>queries.some((q:string)=>(s.name+s.description).toLowerCase().includes(q))),skills:this.skills.filter(s=>queries.some((q:string)=>(s.name+s.description).toLowerCase().includes(q)||['联网','网页','搜索','资料'].includes(q)&&s.name==='agent-reach')).slice(0,15)};}
       case 'skill_read': {const s=this.skills.find(s=>s.id===a.id);if(!s)throw new Error('未发现该 Skill');const resource=a.resource||'SKILL.md';if(path.isAbsolute(resource))throw new Error('Skill 参考文件必须为相对路径');const p=await safePath(path.dirname(s.source),resource),stat=await fs.stat(p);if(!stat.isFile()||stat.size>500000)throw new Error('Skill 参考文件必须是小于 500 KB 的文本文件');const text=await fs.readFile(p,'utf8');if(text.includes('\0'))throw new Error('Skill 参考文件不是文本');return {name:s.name,resource,instructions:text.slice(0,24000),truncated:text.length>24000,note:'仅为指令，依赖工具未自动安装或验证；共享只读工具优先，命令仍走审批。'};}
+      case 'workbench_read': return this.maintenance.read(ctx,a.path,a.offset||0);
+      case 'workbench_propose_change': {const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');if(events.slice(last<0?0:last).some(e=>e.type==='maintenance_declined'))throw new Error('本轮维护应用已被拒绝，不会重复请求确认；请等待新的用户指令');return this.maintenance.propose(ctx,a.summary,a.changes);}
       case 'memory_search': return this.retrieval.search(a.query||'','memory','',ctx.signal);
       case 'knowledge_search': return this.retrieval.search(a.query,'all',ctx.task.id,ctx.signal);
       case 'knowledge_index': {const p=await safePath(ctx.task.workspace,a.path),stat=await fs.stat(p);if(!stat.isFile()||stat.size>500000)throw new Error('仅支持不超过 500 KB 的 UTF-8 文本');const text=await fs.readFile(p,'utf8');if(text.includes('\0'))throw new Error('不支持二进制文件');return this.retrieval.index(path.relative(ctx.task.workspace,p),'task:'+ctx.task.id,text,ctx.signal);}

@@ -14,6 +14,7 @@ export const SYSTEM = `你是用户的本地通用 Agent。始终用简体中文
 只在授权任务目录操作。先读取已有文件再编辑。复杂任务可委派，简单任务直接完成。不要输出内部思维链，只输出简洁计划、行动说明和结果。
 资料任务必须实际检索并读取来源再下结论。联网可使用 web_search、web_read 共享只读连接器，本地模型不等于无法使用网络工具。工具不可用时报告真实错误，不编造来源。
 Skills 是指令而非模型自带知识。用 tools_search 查找相关技能，再用 skill_read 读取指令与相对参考文件。web_read 失败可尝试 fetch_url；搜索失败可用 desktop_search 查找可用连接器并通过 desktop_read 读取。受控阶段不能运行 Skill 中的任意命令，也不能把未验证依赖当成可用工具。
+用户要求修改工作台自身的网页时，不要在资料任务目录找应用源码；用 workbench_read 读取真实源码及 hash，再用 workbench_propose_change 提议网页或测试修改。后端先做隔离检查，再在当前网页请用户确认应用。只有 status=applied 才能声称已修改；当前入口不改后端、不自动发布 GitHub。
 遇到失败先分析工具反馈再更换方法，不要无限重试。调用工具创建用户需要的成果，结束时必须调用 finish_task，列出工作区内的真实成果路径；无法完成时 outcome 使用 blocked，不能冒充完成。`;
 
 function processEnv(ctx: RunContext, token: string): NodeJS.ProcessEnv {
@@ -80,7 +81,7 @@ export class Engines {
     const reasoning=profile.effort==='none'?'none':profile.effort==='on'?'low':undefined;
     ctx.emit('model_config','qwen',{model:config.qwenModel,effort:profile.effort||'inherit',parameter:reasoning?{reasoning_effort:reasoning}:null,note:'on 仅开启思考，沿用模型现有预算'});
     const messages:any[]=[{role:'system',content:ctx.stage?SYSTEM+'\n你是工作台的受控执行阶段。仅使用本阶段工具，用 submit_stage 提交。':SYSTEM},{role:'user',content:prompt}];
-    const limit=30;let textOnlyRetries=0;
+    const limit=30;let textOnlyRetries=0,lastToolError='',sameToolErrors=0;
     for(let step=0;step<limit;step++){
       ctx.signal.throwIfAborted();
       const estimated=JSON.stringify(messages).length;
@@ -105,7 +106,7 @@ export class Engines {
       if(!message.tool_calls?.length){if(textOnlyRetries++<1){messages.push({role:'user',content:ctx.stage?'本阶段尚未实际完成工具工作。请调用当前提供的只读检索/读取工具取得证据，再调用 submit_stage；只输出计划或承诺不能结束本阶段。':'本次是工具任务，你已获得共享工具。不要因本地模型身份声称不能联网：可用 web_search、web_read、fetch_url、tools_search、skill_read、desktop_search。先实际完成所需操作，再调用 finish_task；真实无法完成则明确 blocked。'});continue;}return message.content || '';}
       for(const call of message.tool_calls){
         ctx.signal.throwIfAborted(); let result:any;
-        try {result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'qwen');} catch(e) {result={error:errorText(e)};}
+        try {result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'qwen');lastToolError='';sameToolErrors=0;} catch(e) {const error=errorText(e),key=call.function.name+':'+error;sameToolErrors=key===lastToolError?sameToolErrors+1:1;lastToolError=key;if(sameToolErrors>=3)throw new Error('同一工具连续失败三次，已停止重复调用：'+error);result={error};}
         messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});
         if(ctx.stage&&call.function.name==='submit_stage'&&result?.accepted)return '阶段结果已提交';
         if(call.function.name==='finish_task'&&result?.recorded)return '任务结果已提交';

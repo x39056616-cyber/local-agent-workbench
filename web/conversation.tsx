@@ -1,13 +1,14 @@
 import React,{useEffect,useState} from 'react';
 import {api,download,imagePreview} from './client.ts';
 import {Icon} from './ui.tsx';
+import {trimUrlToken} from './links.ts';
 
 const names:Record<string,string>={qwen:'Qwen',harness:'DeepSeek',codex:'Codex',system:'工作台'};
 const normalize=(name:string)=>name.replaceAll('\\','/').replace(/^\.\//,'');
 export const internalFile=(name:string)=>/^(?:\.agent-reports\/|attachments\/|agent-result\.md$)/.test(normalize(name));
 
 function Inline({text,onFile}:{text:string;onFile?:(name:string)=>void}){
- const pieces=text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\s)]+\))/g);
+ const pieces=text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\s)]+\)|https?:\/\/[^\s<>`"'，。；！？、）】》]+)/gi);
  return <>{pieces.map((s,i)=>{
    if(s.startsWith('`')&&s.endsWith('`'))return <code key={i}>{s.slice(1,-1)}</code>;
    if(s.startsWith('**')&&s.endsWith('**'))return <strong key={i}>{s.slice(2,-2)}</strong>;
@@ -15,7 +16,9 @@ function Inline({text,onFile}:{text:string;onFile?:(name:string)=>void}){
      if(/^https?:\/\//i.test(url))return <a href={url} target="_blank" rel="noreferrer noopener" key={i}>{label}</a>;
      if(onFile&&!/^(?:[a-z][a-z\d+.-]*:|\/\/|#)/i.test(url))return <button className="inline-file" key={i} onClick={()=>{try{onFile(decodeURIComponent(url));}catch{onFile(url);}}}>{label}</button>;
      return <React.Fragment key={i}>{label}</React.Fragment>;
-   }return <React.Fragment key={i}>{s}</React.Fragment>;
+   }
+   if(/^https?:\/\//i.test(s)){const {url,trailing}=trimUrlToken(s);return <React.Fragment key={i}><a href={url} target="_blank" rel="noreferrer noopener">{url}</a>{trailing}</React.Fragment>;}
+   return <React.Fragment key={i}>{s}</React.Fragment>;
  })}</>;
 }
 function Copy({text,label='复制'}:{text:string;label?:string}){const [state,setState]=useState('');return <button className="copy-button" onClick={()=>void navigator.clipboard.writeText(text).then(()=>setState('已复制'),()=>setState('复制失败'))}>{state||label}</button>;}
