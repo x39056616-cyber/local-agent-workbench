@@ -148,7 +148,7 @@ const server=http.createServer(async(req,res)=>{
           await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true,task:store.get(task.id)});
         }
         if(action==='files'&&req.method==='GET'){
-          const files:any[]=[];const walk=async(dir:string,depth:number)=>{if(depth>3||files.length>=200)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()||['node_modules','.git'].includes(e.name))continue;const p=await safePath(task.workspace,path.join(dir,e.name));if(e.isDirectory())await walk(p,depth+1);else {const s=await fs.stat(p);files.push({path:path.relative(task.workspace,p),bytes:s.size});}}};await walk(task.workspace,0);return json(res,200,files);
+          const files:any[]=[];const walk=async(dir:string,depth:number)=>{if(depth>3||files.length>=200)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()||['node_modules','.git','.agent-recovery'].includes(e.name))continue;const p=await safePath(task.workspace,path.join(dir,e.name));if(e.isDirectory())await walk(p,depth+1);else {const s=await fs.stat(p);files.push({path:path.relative(task.workspace,p),bytes:s.size});}}};await walk(task.workspace,0);return json(res,200,files);
         }
         if(action==='preview'&&req.method==='GET')return json(res,200,await previewArtifact(task.workspace,url.searchParams.get('path')||''));
         if(action==='file'&&req.method==='GET'){

@@ -10,6 +10,7 @@ import { Engines } from './engines.ts';
 import {Workflows,validateWorkflow} from './workflows.ts';
 import {runBfcl} from './evaluation.ts';
 import {taskRoute} from './routing.ts';
+import {recoveryDiagnosis} from './supervisor.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
@@ -71,7 +72,7 @@ export class Agent extends EventEmitter {
       ctx.emit('artifact','system',{path:'agent-result.md'});
       ctx.emit('final',rootEngine,{text:answer,files:completion.data.files,turnId:options.turnId||task.id});
       this.store.update(task.id,{status:'succeeded',result:answer});ctx.emit('status','system',{status:'succeeded',result:answer});
-    }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});ctx.emit('status','system',{status,error:message});}
+    }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});if(!controller.signal.aborted){const diagnosis=recoveryDiagnosis(e);ctx.emit('failure_diagnosis','system',diagnosis);ctx.emit('message','system',{text:'任务尚未完成：'+message+'\n'+diagnosis.advice+' 已有记录和成果已保留。'});}ctx.emit('status','system',{status,error:message});}
     finally{clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }
   cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');

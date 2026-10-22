@@ -5,7 +5,7 @@ export function isGreeting(prompt:string){
 }
 // 只约束明确要求查阅外部资料的任务，普通解释与自包含计算不强制检索。
 export function researchKinds(prompt:string):('web'|'local')[]{
- const text=prompt.replace(/```[\s\S]*?```/g,'').replace(/不(?:需要|要|用)?(?:联网|上网|搜索)/g,'');
+ const text=prompt.replace(/```[\s\S]*?```/g,'').replace(/(?:不(?:需要|要|用)?|无需|禁止|不得|不允许)(?:(?:运行|执行)命令[或和、])?(?:联网|上网|搜索)/g,'');
  const explain=/^(?:请问[，,\s]*)?(?:请|帮我)?(?:解释|讲解|介绍|比较|什么是|为什么|如何|怎么|what\b|why\b|how\b|explain\b|compare\b)/i.test(text)&&!/(?:帮我|替我|现在|实际|直接|然后|并且?|同时)(?:去)?(?:查找|查阅|查|搜|检索|读取|联网)/.test(text);
  const urls=/https?:\/\//i.test(text),local=/(?:读取|查找|查阅|查询|检索|搜索|分析|总结|根据|从)[\s\S]{0,100}(?:本地|知识库|资料库|附件|文件|目录|仓库)|(?:知识库|资料库|附件)[\s\S]{0,40}(?:查|搜|检索|总结)|附件文件：/.test(text);
  if(explain&&!urls)return [];
