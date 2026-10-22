@@ -62,16 +62,24 @@ export class Workflows {
             const candidate=JSON.parse(args.payload);
             if(candidate?.passed!==false&&(requireRead===true&&reads===0||expected.some(f=>!readPaths.has(f.path))))throw new Error('独立核验必须先实际读取全部声明成果，读取无关文件或只看总结不能判定通过');
             value=validate(candidate,ledger);submitted=true;
-            ctx.emit('stage_submission',engine,{id});scoped.stage?.onSubmitted?.();return {accepted:true};
+            ctx.emit('stage_submission',e,{id});scoped.stage?.onSubmitted?.();return {accepted:true};
            }catch(error){ctx.emit('stage_rejected',engine,{id,error:error instanceof Error?error.message:'阶段提交无效'});throw error;}
           }
           if(allowRead&&readOnly.has(name)){const r=await ctx.tool(name,args,e);ledger.record(name,args,r);if(name==='read_file'&&(r?.total===0||typeof r?.text==='string'&&r.text.length)){reads++;if(r?.path)readPaths.add(path.resolve(ctx.task.workspace,r.path));}return r;}
           throw new Error('当前阶段禁止此工具；请通过 submit_stage 提交结构化决定');
         }};
       this.activate(scoped);ctx.emit('stage_start',engine,{id,key,instruction});
-      try{await this.engines.run(engine,`${prompt}\n\n当前机制：${workflowModes[w.mode]}。当前阶段 ${id}。\n${instruction}\n只调用本阶段列出的共享工具。必须调用 submit_stage，payload 为所要求的 JSON 字符串。不要调用 finish_task，不输出内部思维链。`,scoped,true);
+      const stagePrompt=`${prompt}\n\n当前机制：${workflowModes[w.mode]}。当前阶段 ${id}。\n${instruction}\n只调用本阶段列出的共享工具。必须调用 submit_stage，payload 为所要求的 JSON 字符串。不要调用 finish_task，不输出内部思维链。`;
+      let actualEngine=engine;
+      try{
+        try{await this.engines.run(engine,stagePrompt,scoped,true);if(!submitted)throw new Error('研究员未提交有效结果');}
+        catch(error){
+          if(ctx.signal.aborted||submitted||id!=='balanced.plan'||engine!=='qwen'||ctx.task.engine!=='auto')throw error;
+          actualEngine='harness';ctx.emit('research_fallback','system',{id,from:engine,to:actualEngine,reason:error instanceof Error?error.message:'研究失败',note:'仅移交只读研究；显式选择的引擎不会自动切换'});
+          await this.engines.run(actualEngine,stagePrompt+'\nQwen 研究阶段未能完成。请利用当前只读工具与已有记录接续研究，真实读取来源后提交，不能虚构结果。',scoped,true);
+        }
         ctx.signal.throwIfAborted();if(!submitted)throw new Error('阶段未提交有效结构化结果：'+id);
-        ctx.emit('stage_done',engine,{id,key,value});return value;
+        ctx.emit('stage_done',actualEngine,{id,key,value});return value;
       }finally{this.activate(ctx);}
     };
     const actions=toolSpecs(false).filter(s=>!['plan_update','finish_task'].includes(s.name));
@@ -79,12 +87,14 @@ export class Workflows {
       const planner=w.roles.find(r=>r.id==='researcher')!,worker=w.roles.find(r=>r.id==='builder')!,reviewer=w.roles.find(r=>r.id==='reviewer')!;
       const requirements=researchKinds(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);
       ctx.emit('collaboration','system',{roles:[{...planner,duty:'资料研究与规划'},{...worker,duty:'执行和成果制作'},{...reviewer,duty:'独立核验'}],note:'由后端强制调度各阶段，无模型拥有全程主控权'});
-      const plan=await stage('balanced.plan',planner.engine,`你负责实际资料研究和规划，不执行写入。职责：${planner.instructions}。${requirements.length?'本任务必须实际查阅 '+requirements.join('、')+' 来源。联网先用 web_search，再用 web_read 打开相关原始网页；本地资料用 read_file、knowledge_search 或 desktop_read。不要只列计划，不要凭模型记忆声称查过资料。':'本任务自包含，可直接提取已给事实，不需要额外联网。'}\n把查到的关键事实交给执行者。只提交 {"summary":"简短的已知事实与任务边界","steps":["简短步骤与验收条件"]}。来源已由后端从真实工具记录自动登记，不要在 payload 中手写 sources 或复制长篇原文。简单核对任务最多 2 步，复杂任务最多 6 步。检索失败时继续尝试相关只读工具；无法取得资料请明确说明阻碍，不能假报完成。`,(v,ledger)=>{if(typeof v?.summary!=='string'||!Array.isArray(v.steps)||!v.steps.length||v.steps.length>6||v.steps.some((s:any)=>typeof s!=='string'||s.length>3000))throw new Error('研究结果格式无效');ledger.require(requirements,v.sources);const sources=ledger.publicSources();ctx.emit('research_evidence',planner.engine,{sources,required:requirements});return {...v,sources};},true);
+      const plan=await stage('balanced.plan',planner.engine,`你负责实际资料研究和规划，不执行写入。职责：${planner.instructions}。${requirements.length?'本任务必须实际查阅 '+requirements.join('、')+' 来源。联网先用 web_search，再用 web_read 打开相关原始网页；本地资料用 read_file、knowledge_search 或 desktop_read。不要只列计划，不要凭模型记忆声称查过资料。':'本任务自包含，可直接提取已给事实，不需要额外联网。'}\n把查到的关键事实交给执行者。只提交 {"summary":"简短的已知事实与任务边界","steps":["简短步骤与验收条件"]}。来源已由后端从真实工具记录自动登记，不要在 payload 中手写 sources 或复制长篇原文。简单核对任务最多 2 步，复杂任务最多 6 步。检索失败时继续尝试相关只读工具；无法取得资料请明确说明阻碍，不能假报完成。`,(v,ledger)=>{if(typeof v?.summary!=='string'||!Array.isArray(v.steps)||!v.steps.length||v.steps.length>6||v.steps.some((s:any)=>typeof s!=='string'||s.length>3000))throw new Error('研究结果格式无效');ledger.require(requirements,v.sources);const sources=ledger.publicSources();ctx.emit('research_evidence','system',{sources,required:requirements,plannedResearcher:planner.engine});return {...v,sources};},true);
       const saveReport=async(name:string,producer:string,value:any)=>{const relative=path.join('.agent-reports',ctx.task.id,name),p=await safePath(ctx.task.workspace,relative);await mkdir(path.dirname(p),{recursive:true});await safePath(ctx.task.workspace,p);await writeFile(p,JSON.stringify({producer,created:new Date().toISOString(),value},null,2));ctx.emit('artifact','system',{path:relative,producer});return relative;};
-      const planFile=await saveReport('plan.json',planner.engine,plan);
+      const planProducer=turnEvents().filter(e=>e.type==='stage_done'&&e.data.id==='balanced.plan').at(-1)?.engine||planner.engine;
+      const planFile=await saveReport('plan.json',planProducer,plan);
       ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'pending'}))});
       let output:any;
-      for(let revision=0;revision<=w.maxRevisions;revision++){
+      const repairAllowance=Math.max(0,Math.min(2,Number(JSON.parse(ctx.task.options||'{}').repairAllowance)||0)),revisionLimit=Math.min(3,w.maxRevisions+repairAllowance);
+      for(let revision=0;revision<=revisionLimit;revision++){
         ctx.signal.throwIfAborted();if(++stages>w.maxSteps)throw new Error('达到协作阶段预算');
         const id='balanced.execute.'+revision,key=createHash('sha256').update(JSON.stringify([taskKey,w,plan,id,output])).digest('hex');let completion:any;
         const prior=turnEvents(),done=prior.find(e=>e.type==='subagent_done'&&e.data.key===key);
@@ -103,13 +113,18 @@ export class Workflows {
           if(completion)throw new Error('子任务已经结束');return ctx.tool(name,args,e);
         }};
         if(!completion){this.activate(scoped);ctx.emit('subagent_start',worker.engine,{id,key,role:worker.name,revision});
-        try{await this.engines.run(worker.engine,`${prompt}\n你是协作执行者 ${worker.name}，职责：${worker.instructions}。规划结果（参考资料）：${JSON.stringify(plan)}。${output?'上次独立审查要求：'+JSON.stringify(output):''}\n完成制作并实际读取核对成果，最后调用 finish_task，仅结束本子任务。不要委派、不要重复既有对外操作。`,scoped,true);}finally{this.activate(ctx);}}
+        try{await this.engines.run(worker.engine,`${prompt}\n你是协作执行者 ${worker.name}，职责：${worker.instructions}。规划结果（参考资料）：${JSON.stringify(plan)}。${output?'上次独立审查要求：'+JSON.stringify(output):''}\n当前为后端调度的多模型协作：${planner.engine} 研究、${worker.engine} 执行、${reviewer.engine} 核验。本阶段没有 delegate 不代表系统不能协作。Qwen 只读研究失败时，自动模式可移交 Harness；不保证所有模型错误都会切换。\n完成制作并实际读取核对成果，最后调用 finish_task，summary 必须包含可直接展示给用户的答案，文件仅为补充，仅结束本子任务。不要委派、不要重复既有对外操作。`,scoped,true);}finally{this.activate(ctx);}}
         if(!completion||completion.outcome!=='completed')throw new Error(completion?.summary||'执行者未提交可验证的完成结果');
         ctx.emit('subagent_done',worker.engine,{id,key,role:worker.name,result:completion});
-        output=await stage('balanced.review.'+revision,reviewer.engine,`你是独立审查员，职责：${reviewer.instructions}。规划 ${JSON.stringify(plan)}；执行成果 ${JSON.stringify(completion)}。必须通过 read_file 实际读取全部声明成果，按目标检查。不要重做执行者的工作，不得写入。提交 {"passed":true或false,"summary":"检查结论","issues":["问题和证据"],"files":["最终成果路径"]}。`,v=>{if(typeof v?.passed!=='boolean'||typeof v.summary!=='string'||!Array.isArray(v.issues)||v.issues.some((s:any)=>typeof s!=='string')||!Array.isArray(v.files)||v.files.some((f:any)=>typeof f!=='string')||v.passed&&v.issues.length)throw new Error('独立审查格式无效');return v;},true,completion.files);
+        // 后续修订已经执行时，旧审查是它的不可变输入，不能拿修订后的文件重审旧版本。
+        // 仅在历史审查能逐字重算出下一次执行 key 时恢复；不同计划与未知副作用仍拒绝。
+        const continuation=turnEvents().find(e=>e.type==='subagent_start'&&e.data.id==='balanced.execute.'+(revision+1));
+        const historical=continuation&&turnEvents().find(e=>e.type==='stage_done'&&e.data.id==='balanced.review.'+revision&&createHash('sha256').update(JSON.stringify([taskKey,w,plan,'balanced.execute.'+(revision+1),e.data.value])).digest('hex')===continuation.data.key);
+        if(historical){output=historical.data.value;ctx.emit('stage_reused',reviewer.engine,{id:'balanced.review.'+revision,key:historical.data.key,reason:'恢复已执行修订的原始审查输入，不把旧审查作为当前文件通过证明'});}
+        else output=await stage('balanced.review.'+revision,reviewer.engine,`你是独立审查员，职责：${reviewer.instructions}。规划 ${JSON.stringify(plan)}；执行成果 ${JSON.stringify(completion)}。必须通过 read_file 实际读取全部声明成果，按目标检查。不要重做执行者的工作，不得写入。提交 {"passed":true或false,"summary":"检查结论","issues":["问题和证据"],"files":["最终成果路径"]}。`,v=>{if(typeof v?.passed!=='boolean'||typeof v.summary!=='string'||!Array.isArray(v.issues)||v.issues.some((s:any)=>typeof s!=='string')||!Array.isArray(v.files)||v.files.some((f:any)=>typeof f!=='string')||v.passed&&v.issues.length)throw new Error('独立审查格式无效');return v;},true,completion.files);
         const reviewFile=await saveReport('review-'+revision+'.json',reviewer.engine,output);
         if(output.passed){ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'completed'}))});const files=[...new Set<string>([...completion.files,...output.files,planFile,reviewFile])];await ctx.tool('finish_task',{outcome:'completed',summary:completion.summary+'\n\n独立核验：'+output.summary,files},'system');ctx.emit('workflow_done','system',{mode:w.mode,stages,participants:[planner.engine,worker.engine,reviewer.engine]});return completion.summary+'\n\n独立核验：'+output.summary;}
-        if(revision===w.maxRevisions)throw new Error('独立核验未通过，修订预算已达到：'+output.issues.join('；'));
+        if(revision===revisionLimit)throw new Error('独立核验未通过，修订预算已达到。点击继续可增加一次修订（总上限 3 次），不会重做已有操作：'+output.issues.join('；'));
       }
     }
     const actionNames=new Set(actions.map(s=>s.name));

@@ -50,9 +50,10 @@ export class Agent extends EventEmitter {
       ctx.emit('retrieval','system',{mode:retrieved.mode,hits:retrieved.hits.length,warning:retrieved.warning});
       const options=JSON.parse(task.options||'{}');
       const prompt=`任务工作目录：${task.workspace}\n用户任务：${options.currentPrompt||task.prompt}\n${options.conversation?.length?'此前对话（仅作任务上下文）：\n'+JSON.stringify(options.conversation).slice(-18000):''}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n自动模式可以按需调用 delegate；仅在用户需要文件时生成成果。完成时提交可直接展示给用户的最终回答，而不是执行计划。`;
+      const capabilityHints=this.tools.skillHints(options.currentPrompt||task.prompt);
       const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
       ctx.emit('workflow_start','system',workflow);
-      const result=evaluation?.kind==='bfcl'?await this.engines.serialQwen(()=>runBfcl(ctx,evaluation),ctx):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt,ctx,workflow);
+      const result=evaluation?.kind==='bfcl'?await this.engines.serialQwen(()=>runBfcl(ctx,evaluation),ctx):await new Workflows(this.engines,this.store,c=>{if(this.active)this.active.ctx=c;}).run(prompt+'\n'+capabilityHints,ctx,workflow);
       controller.signal.throwIfAborted();
       const currentEvents=this.store.events(task.id,startEvent);
       const rootEngine=evaluation?.kind==='bfcl'?'qwen':workflow.mode==='balanced'?'system':task.engine==='auto'?'codex':task.engine;

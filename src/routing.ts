@@ -9,7 +9,8 @@ export function researchKinds(prompt:string):('web'|'local')[]{
  const explain=/^(?:请问[，,\s]*)?(?:请|帮我)?(?:解释|讲解|介绍|比较|什么是|为什么|如何|怎么|what\b|why\b|how\b|explain\b|compare\b)/i.test(text)&&!/(?:帮我|替我|现在|实际|直接|然后|并且?|同时)(?:去)?(?:查找|查阅|查|搜|检索|读取|联网)/.test(text);
  const urls=/https?:\/\//i.test(text),local=/(?:读取|查找|查阅|查询|检索|搜索|分析|总结|根据|从)[\s\S]{0,100}(?:本地|知识库|资料库|附件|文件|目录|仓库)|(?:知识库|资料库|附件)[\s\S]{0,40}(?:查|搜|检索|总结)|附件文件：/.test(text);
  if(explain&&!urls)return [];
- const web=urls||!local&&/(?:联网|上网|调研|搜集资料|查资料|查找资料|搜索|搜一下|查一下|找[\s\S]{0,40}(?:资料|来源|文献|论文)|查[\s\S]{0,40}(?:最新|资料|来源|文献|论文)|今天的(?:天气|新闻|行情)|实时(?:数据|天气|价格))/.test(text);
+ const platformLookup=/(?:github|bilibili|youtube|reddit|twitter|小红书|微博|B站|知乎)/i.test(text)&&/(?:找|搜|查|热门|热榜|趋势|最新|本月|这一个月|近[一\d]+[天月周])/i.test(text);
+ const web=urls||!local&&(platformLookup||/(?:联网|上网|调研|搜集资料|查资料|查找资料|搜索|搜一下|查一下|找[\s\S]{0,40}(?:资料|来源|文献|论文)|查[\s\S]{0,40}(?:最新|资料|来源|文献|论文)|今天的(?:天气|新闻|行情)|实时(?:数据|天气|价格))/.test(text));
  return [...(web?['web' as const]:[]),...(local?['local' as const]:[])];
 }
 export function requiresFileDelivery(prompt:string){

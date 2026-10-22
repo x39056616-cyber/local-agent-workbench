@@ -136,7 +136,14 @@ const server=http.createServer(async(req,res)=>{
             if(chat&&isGreeting(current)&&target!=='codex')profiles[target]={...(profiles[target]||{}),effort:target==='qwen'?'none':'off'};
             const next={...prior,...profiles,workflow,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
             store.update(task.id,{status:'queued',error:'',result:'',engine,options:JSON.stringify(next)});
-          }else store.update(task.id,{status:'queued',error:'',result:''});
+          }else {
+            const reviews=store.events(task.id).filter(e=>e.type==='stage_done'&&/^balanced\.review\.\d+$/.test(e.data.id||'')&&e.data.value?.passed===false);
+            const limit=Math.min(3,(prior.workflow?.maxRevisions??1)+(prior.repairAllowance||0));
+            if(prior.workflow?.mode==='balanced'&&reviews.some(e=>Number(e.data.id.split('.').at(-1))>=limit)&&limit<3){prior.repairAllowance=Math.min(2,(prior.repairAllowance||0)+1);agent.emitEvent(task.id,'repair_budget','system',{additionalRevisions:1,totalLimit:limit+1});}
+            // 旧版曾把联网请求保存成自动聊天，重新续接时按当前路由修正。
+            if(prior.intent==='chat'&&prior.requestedIntent!=='chat'&&taskRoute({...task,options:JSON.stringify({...prior,intent:'auto'})}).kind==='task')prior.intent='task';
+            store.update(task.id,{status:'queued',error:'',result:'',options:JSON.stringify(prior)});
+          }
           agent.emitEvent(task.id,'checkpoint','user',{message:'用户继续任务。先核对已有成果与操作记录。'});
           await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true,task:store.get(task.id)});
         }
