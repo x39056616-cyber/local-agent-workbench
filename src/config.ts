@@ -40,6 +40,8 @@ export interface Task {
 }
 export interface EventRecord { id: number; taskId: string; type: string; engine: string; data: any; created: string }
 export interface RunContext {
+  navigationOrigins?:string[];
+  navigationAllowed?:(url:string)=>boolean;
   onCompleted?:()=>void;
   chat?: boolean;
   stage?: {id:string;readOnly:boolean;onSubmitted?:()=>void}; specs?: any[];

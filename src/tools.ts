@@ -18,10 +18,16 @@ import {Maintenance,requestsWorkbenchChange} from './maintenance.ts';
 import {workbenchApplicationRequired} from './maintenance-intent.ts';
 import {BrowserTools} from './browser.ts';
 import {selectTools} from './tool-selection.ts';
+import {CrawlService} from './crawler.ts';
 
 const str=(description:string)=>({type:'string',description});
 const spec=(name:string,description:string,properties:any,required:string[]=[])=>({name,description,parameters:{type:'object',properties,required,additionalProperties:false}});
 const specs=[
+  spec('crawl_start','批量采集公开网页，由后端 Crawlee 调度，遵守 robots.txt、站点范围与页数预算。返回 jobId；完成前可 crawl_status 等待，之后必须 crawl_read 阅读正文再总结。自动导出 JSON、Markdown、CSV。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},maxPages:{type:'integer',minimum:1,maximum:30},maxDepth:{type:'integer',minimum:0,maximum:3},mode:{type:'string',enum:['http','auto','browser']}},['urls']),
+  spec('crawl_status','查询本任务采集进度与来源目录；省略 jobId 列出已有采集，重启后先查再恢复。waitMs 最多 10000，按 nextPagesOffset 翻目录。目录不能替代正文阅读。',{jobId:str('crawl_start 返回的 ID'),waitMs:{type:'integer',minimum:0,maximum:10000},pagesOffset:{type:'integer',minimum:0}}),
+  spec('crawl_read','读取已成功采集的单页正文，每次最多 8000 字符；按 nextOffset 继续。可在恢复后读取本任务已保存来源。',{jobId:str('采集 ID'),url:str('目录中的原始 url'),offset:{type:'integer',minimum:0}},['jobId','url']),
+  spec('crawl_resume','显式恢复本任务暂停或中断的采集。复用已保存页面与队列，不重置页数预算。',{jobId:str('采集 ID')},['jobId']),
+  spec('crawl_stop','停止本任务的指定采集，保存已经得到的正文与未完成队列。',{jobId:str('采集 ID')},['jobId']),
   spec('tool_invoke','工具不在当前精简列表时，先 tools_search 获取真实 schema，再经此入口调用。全部操作仍经过原权限、审批与预算。',{name:str('已发现的真实工具名'),arguments:{type:'object',properties:{},additionalProperties:true}},['name','arguments']),
   spec('browser_open','用隔离浏览器打开公网网页并返回可操作控件快照。web_read 无法读取动态页面时使用。',{url:str('公开 HTTP/HTTPS 地址')},['url']),
   spec('browser_read','分段读取当前网页正文和控件快照，不执行操作。长页面按 nextOffset 和 nextControlsOffset 继续读取。',{offset:{type:'integer',minimum:0},controlsOffset:{type:'integer',minimum:0}}),
@@ -77,7 +83,9 @@ export async function publicAddress(url:string){
   if(!addresses.length||addresses.some(x=>!publicIPv4(x.address)))throw new Error('不允许读取本机、内网或保留地址。');
   return {u,address:addresses[0].address};
 }
-export async function publicFetch(url:string,signal:AbortSignal,redirects=0):Promise<any>{
+export async function publicFetch(url:string,signal:AbortSignal,redirects=0,rawMode=false,origins?:Set<string>,allow?:(url:string)=>boolean):Promise<any>{
+  signal.throwIfAborted();if(origins&&!origins.has(new URL(url).origin))throw new Error('链接或重定向超出采集站点范围');
+  if(allow&&!allow(url))throw new Error('robots.txt 不允许采集该地址或重定向目标');
   const {u,address}=await publicAddress(url);
   if(config.webProxy){
     // CONNECT 指向已校验的公网 IP；TLS 和 Host 仍核对原始域名，避免代理端重新解析绕过校验。
@@ -85,21 +93,21 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0):Pro
     const dispatcher=new ProxyAgent({uri:config.webProxy,requestTls:{servername:u.hostname}});
     try{
       const res=await proxyRequest(target,{dispatcher,method:'GET',signal,headers:{host:u.host,'user-agent':'LocalAgent/0.1',accept:'text/*,application/json'},headersTimeout:25000,bodyTimeout:25000});
-      if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){res.body.destroy();if(redirects>=3)throw new Error('网页重定向过多');return await publicFetch(new URL(String(res.headers.location),u).href,signal,redirects+1);}
+      if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){res.body.destroy();if(redirects>=3)throw new Error('网页重定向过多');return await publicFetch(new URL(String(res.headers.location),u).href,signal,redirects+1,rawMode,origins,allow);}
       if(res.statusCode>=400){res.body.destroy();throw new Error('网页返回 HTTP '+res.statusCode);}
       if(!/text|json|xml/.test(String(res.headers['content-type']||''))){res.body.destroy();throw new Error('该链接不是可读取的文本网页');}
       const chunks:Buffer[]=[];let size=0;for await(const c of res.body){size+=c.length;if(size>1000000){res.body.destroy();throw new Error('网页超过 1 MB');}chunks.push(Buffer.from(c));}
       const raw=Buffer.concat(chunks).toString('utf8');const text=raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();
-      return {url:u.href,text:text.slice(0,28000),truncated:text.length>28000};
+      return rawMode?{url:u.href,html:raw,contentType:String(res.headers['content-type']||'')}:{url:u.href,text:text.slice(0,28000),truncated:text.length>28000};
     }finally{await dispatcher.close();}
   }
   return new Promise((resolve,reject)=>{
     const req=(u.protocol==='https:'?https:http).get(u,{signal,timeout:25000,headers:{'User-Agent':'LocalAgent/0.1','Accept':'text/*,application/json'},lookup:(_host:any,_opts:any,cb:any)=>{if(_opts?.all)cb(null,[{address,family:4}]);else cb(null,address,4);}},res=>{
-      if(res.statusCode && res.statusCode>=300 && res.statusCode<400 && res.headers.location){res.resume();if(redirects>=3)return reject(new Error('网页重定向过多'));publicFetch(new URL(res.headers.location,u).href,signal,redirects+1).then(resolve,reject);return;}
+      if(res.statusCode && res.statusCode>=300 && res.statusCode<400 && res.headers.location){res.resume();if(redirects>=3)return reject(new Error('网页重定向过多'));publicFetch(new URL(res.headers.location,u).href,signal,redirects+1,rawMode,origins,allow).then(resolve,reject);return;}
       if((res.statusCode||500)>=400){res.resume();reject(new Error('网页返回 HTTP '+res.statusCode));return;}
       const type=String(res.headers['content-type']||'');if(!/text|json|xml/.test(type)){res.resume();reject(new Error('该链接不是可读取的文本网页'));return;}
       let raw='',size=0;res.setEncoding('utf8');res.on('data',c=>{size+=Buffer.byteLength(c);if(size>1_000_000){req.destroy(new Error('网页超过 1 MB，请选择更具体的页面'));return;}raw+=c;});
-      res.on('end',()=>{const text=raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();resolve({url:u.href,text:text.slice(0,28000),truncated:text.length>28000});});res.on('error',reject);
+      res.on('end',()=>{const text=raw.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'').replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,'').replace(/<[^>]+>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/\s+/g,' ').trim();resolve(rawMode?{url:u.href,html:raw,contentType:type}:{url:u.href,text:text.slice(0,28000),truncated:text.length>28000});});res.on('error',reject);
     });req.on('timeout',()=>req.destroy(new Error('网页读取超时')));req.on('error',reject);
   });
 }
@@ -107,6 +115,7 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0):Pro
 export class Tools {
   store:Store; skills:any[]=[];
   maintenance:Maintenance;browser=new BrowserTools();
+  crawler:CrawlService;
   subtask:(ctx:RunContext,goal:string,caller:string)=>Promise<any>=async()=>{throw new Error('子任务服务未就绪');};
   roleTask:(ctx:RunContext,args:any,caller:string)=>Promise<any>=async()=>{throw new Error('角色子任务服务未就绪');};
   specsFor(ctx:RunContext){return selectTools(toolSpecs(false),JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);}
@@ -114,7 +123,7 @@ export class Tools {
   delegate:(engine:string,prompt:string,ctx:RunContext)=>Promise<string>=async()=>{throw new Error('委派服务未初始化');};
   approval:(ctx:RunContext,action:string,detail:any)=>Promise<boolean>=async()=>false;
   counts=new Map<string,number>();
-  constructor(store:Store){this.store=store;this.retrieval=new Retrieval(store);this.desktop=new Desktop();this.maintenance=new Maintenance();this.maintenance.approve=(ctx,action,detail)=>this.approval(ctx,action,detail);}
+  constructor(store:Store){this.store=store;this.crawler=new CrawlService(store);this.retrieval=new Retrieval(store);this.desktop=new Desktop();this.maintenance=new Maintenance();this.maintenance.approve=(ctx,action,detail)=>this.approval(ctx,action,detail);}
   async inventory(){
     const found:any[]=[];
     async function scan(dir:string,depth:number){if(depth>4)return;let entries;try{entries=await fs.readdir(dir,{withFileTypes:true});}catch{return;}
@@ -158,7 +167,7 @@ export class Tools {
       const result=await this.execute(ctx,name,args,engine);
       ctx.signal.throwIfAborted();
       const serialized=JSON.stringify(result);this.store.db.prepare('UPDATE operations SET status=?,result=? WHERE id=?').run('succeeded',serialized,id);
-      ctx.emit('tool_done',engine,{id,name,result});if(name!=='tool_result_read'&&!name.startsWith('browser_')&&serialized.length>12000&&result&&typeof result==='object'&&!Array.isArray(result)){const brief:any={operationId:id,...result,contextNote:'完整结果已保存在本任务，可用 tool_result_read 分段读取。'};for(const key of ['text','instructions'])if(typeof brief[key]==='string')brief[key]=brief[key].slice(0,8000);if(JSON.stringify(brief).length>16000)return {operationId:id,url:result.url,text:typeof result.text==='string'?result.text.slice(0,7000):serialized.slice(0,7000),truncated:true,contextNote:brief.contextNote};return brief;}return result;
+      ctx.emit('tool_done',engine,{id,name,result});if(name!=='tool_result_read'&&!name.startsWith('browser_')&&serialized.length>12000&&result&&typeof result==='object'&&!Array.isArray(result)){const brief:any={operationId:id,...result,contextNote:'完整结果已保存在本任务，可用 tool_result_read 分段读取。'};for(const key of ['text','instructions'])if(typeof brief[key]==='string')brief[key]=brief[key].slice(0,8000);if(JSON.stringify(brief).length>16000)return {operationId:id,...(result.jobId?{jobId:result.jobId,status:result.status,counts:result.counts,...(typeof result.text==='string'?{total:result.total,nextOffset:(args.offset||0)+Math.min(7000,result.text.length),fetchedAt:result.fetchedAt}:{} )}:{}),url:result.url,text:typeof result.text==='string'?result.text.slice(0,7000):serialized.slice(0,7000),truncated:true,contextNote:brief.contextNote};return brief;}return result;
     }catch(e){this.store.db.prepare('UPDATE operations SET status=?,result=? WHERE id=?').run('failed',errorText(e),id);ctx.emit('tool_error',engine,{id,name,error:errorText(e)});throw e;}
   }
   async execute(ctx:RunContext,name:string,a:any,engine:string):Promise<any>{
@@ -167,6 +176,7 @@ export class Tools {
     if(name==='run_command'&&/(?:不要|不得|禁止|不能|不允许|无需|不(?:需要|用)?)(?:运行|执行|调用)(?:任何|系统|沙箱)?命令|do not (?:run|execute) (?:any )?commands/i.test(userPrompt))throw new Error('用户明确禁止运行命令，本任务不会发起命令审批或执行。');
     switch(name){
       case 'finish_task': {
+        if([...this.crawler.active.values()].some(a=>a.taskId===ctx.task.id))throw new Error('采集仍在运行，请 crawl_status 等待，或 crawl_stop 保存进度后再交付');
         if(!['completed','blocked'].includes(a.outcome)||!Array.isArray(a.files)||a.files.some((f:any)=>typeof f!=='string'))throw new Error('完成声明格式错误');
         if(a.outcome==='completed'){
           const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');
@@ -196,6 +206,11 @@ export class Tools {
       case 'search_files': {const hits:any[]=[];let scanned=0;const walk=async(dir:string)=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){ctx.signal.throwIfAborted();if(scanned>300||hits.length>=40)return;if(e.isSymbolicLink()||['node_modules','.git'].includes(e.name))continue;const p=await safePath(ctx.task.workspace,path.join(dir,e.name));if(e.isDirectory()){await walk(p);continue;}scanned++;const s=await fs.stat(p);if(s.size>300000)continue;const t=await fs.readFile(p,'utf8');if(t.includes('\0'))continue;const i=t.toLowerCase().indexOf(a.query.toLowerCase());if(i>=0)hits.push({path:path.relative(ctx.task.workspace,p),snippet:t.slice(Math.max(0,i-100),i+600)});}};await walk(ctx.task.workspace);return {hits,scanned};}
       case 'tool_invoke': {if(['tool_invoke','delegate','research_subtask','agent_task','finish_task'].includes(a.name))throw new Error('此工具必须直接调用，不能嵌套');return this.call(ctx,a.name,a.arguments,engine);}
       case 'browser_open': return this.browser.open(ctx,a.url);
+      case 'crawl_start': return this.crawler.start(ctx,a,engine);
+      case 'crawl_status': return a.jobId===undefined?this.crawler.list(ctx):this.crawler.status(ctx,a.jobId,a.waitMs||0,a.pagesOffset||0);
+      case 'crawl_read': return this.crawler.read(ctx,a.jobId,a.url,a.offset||0);
+      case 'crawl_resume': return this.crawler.resume(ctx,a.jobId,engine);
+      case 'crawl_stop': return this.crawler.stop(ctx,a.jobId);
       case 'browser_read': return this.browser.read(ctx,a.offset||0,a.controlsOffset||0);
       case 'browser_action': return this.browser.action(ctx,a,(c,action,detail)=>this.approval(c,action,detail));
       case 'research_subtask': return this.subtask(ctx,a.task,engine);

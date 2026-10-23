@@ -27,6 +27,8 @@ export class BrowserTools {
    let dispatcher:ProxyAgent|undefined;
    try{
     ctx.signal.throwIfAborted();const req=route.request();
+    if(ctx.navigationOrigins&&req.isNavigationRequest()&&req.frame()===s.page.mainFrame()&&!ctx.navigationOrigins.includes(new URL(req.url()).origin))return await route.abort('blockedbyclient');
+    if(ctx.navigationAllowed&&req.isNavigationRequest()&&req.frame()===s.page.mainFrame()&&!ctx.navigationAllowed(req.url()))return await route.abort('blockedbyclient');
     if(['image','media','font'].includes(req.resourceType()))return await route.abort();
     if(req.method()!=='GET'&&(!s.allowWrite||new URL(req.url()).origin!==new URL(s.page.url()).origin))return await route.abort('blockedbyclient');
     const {u,address}=await publicAddress(req.url()),target=new URL(u);target.hostname=address;

@@ -6,6 +6,8 @@
 
 新增基于 [CrewAI 与 Deep Agents 的角色任务](CREW-DEEPAGENTS-UPGRADE.md)：按需派发 writer 制作真实文件，再由独立 reviewer 完整读取验收。角色与模型分开选择，交接与失败由后端校验；常规问答仍直接回复。
 
+[Crawlee 网页采集](CRAWLER.md) 已接入共享工具：批量 HTTP/Chrome 采集、站内跟随与去重、正文分段读取、SQLite 队列恢复，以及 JSON、Markdown、CSV 自动交付。三个引擎都能使用，采集调度本身不调用大模型。
+
 ## 使用
 
 1. 双击 **启动工作台.cmd** 或原有桌面快捷方式，浏览器打开 <http://127.0.0.1:4317>；本地 Qwen 同时在后台准备。

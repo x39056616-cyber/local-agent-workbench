@@ -87,7 +87,7 @@ export class Agent extends EventEmitter {
       if(execution)this.router.record(ctx,execution.decision,'completed',execution.durationMs);
       this.store.update(task.id,{status:'succeeded',result:answer});ctx.emit('status','system',{status:'succeeded',result:answer});
     }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});if(!controller.signal.aborted){const diagnosis=recoveryDiagnosis(e);ctx.emit('failure_diagnosis','system',diagnosis);ctx.emit('message','system',{text:'任务尚未完成：'+message+'\n'+diagnosis.advice+' 已有记录和成果已保留。'});}ctx.emit('status','system',{status,error:message});}
-    finally{await this.tools.browser.close(task.id);clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
+    finally{await this.tools.crawler.close(task.id);await this.tools.browser.close(task.id);clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }
   cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');
     if(this.chats.has(id)){this.chats.get(id)!.abort(new Error('用户停止了对话'));}

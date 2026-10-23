@@ -33,7 +33,7 @@ export function validatePlan(value:any,roles:Role[],maxSteps:number){
   for(const s of value.steps){if(!s||typeof s.id!=='string'||!/^\w{1,32}$/.test(s.id)||seen.has(s.id)||typeof s.goal!=='string'||!s.goal.trim()||s.goal.length>3000||!roles.some(r=>r.id===s.role)||!Array.isArray(s.dependsOn)||s.dependsOn.some((d:any)=>typeof d!=='string'||!seen.has(d)))throw new Error('计划含无效角色、重复 ID、循环或尚未定义的依赖');seen.add(s.id);}
   return value.steps as {id:string;goal:string;role:string;dependsOn:string[]}[];
 }
-const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','workbench_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read']);
+const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','workbench_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read']);
 export const stageSpec={name:'submit_stage',description:'提交当前阶段的结构化结果。payload 是阶段指定格式的 JSON 字符串；提交后立即结束。',parameters:{type:'object',properties:{payload:{type:'string'}},required:['payload'],additionalProperties:false}};
 
 // 阶段串行，因此本机 Qwen 始终只有一个推理请求。结构化结果决定状态迁移。
