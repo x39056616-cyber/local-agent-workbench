@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { promises as fs } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { randomUUID,createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
@@ -27,6 +27,7 @@ const specs=[
   spec('browser_read','分段读取当前网页正文和控件快照，不执行操作。长页面按 nextOffset 和 nextControlsOffset 继续读取。',{offset:{type:'integer',minimum:0},controlsOffset:{type:'integer',minimum:0}}),
   spec('browser_action','操作最近快照中的控件。链接可直接打开；填写和按钮点击必须由网页确认。禁止密码和上传。',{snapshotId:str('最近的快照 ID'),index:{type:'integer',minimum:0},action:{type:'string',enum:['click','fill']},text:str('fill 时要填写的文本')},['snapshotId','index','action']),
   spec('research_subtask','把独立的只读资料核对、提取或分析交给后端选派的模型。提供完整材料和成功条件；简单任务直接做。禁止递归、写入和命令。',{task:str('自包含子任务目标与必要资料')},['task']),
+  spec('agent_task','按任务与成本选派角色子智能体。writer 在专用目录生成声明的文本成果；reviewer 由独立模型完整读取输入后验收。后端检查文件与真实读取；主执行者必须处理未通过的问题。仅自动模式，简单问题不要派发。',{role:{type:'string',enum:['writer','reviewer']},task:str('完整目标与必要背景'),expected_output:str('可检查的内容、格式和验收条件'),input_files:{type:'array',items:{type:'string'},maxItems:6},output_files:{type:'array',items:{type:'string'},maxItems:6}},['role','task','expected_output','input_files','output_files']),
   spec('tool_result_read','按 operationId 分段回看本任务已执行工具的完整结果。',{operationId:str('工具结果中的 operationId'),offset:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:16000}},['operationId']),
   spec('finish_task','结束前必须调用。列出实际成果相对路径和简洁总结。后端会检查文件；未完成使用 blocked。',{outcome:{type:'string',enum:['completed','blocked']},summary:str('已完成的工作或具体阻碍'),files:{type:'array',items:{type:'string'}}},['outcome','summary','files']),
   spec('plan_update','记录或更新任务计划。每项写明步骤标题和状态。',{steps:{type:'array',items:{type:'object',properties:{title:str('步骤'),status:{type:'string',enum:['pending','in_progress','completed']}},required:['title','status'],additionalProperties:false}}},['steps']),
@@ -107,6 +108,7 @@ export class Tools {
   store:Store; skills:any[]=[];
   maintenance:Maintenance;browser=new BrowserTools();
   subtask:(ctx:RunContext,goal:string,caller:string)=>Promise<any>=async()=>{throw new Error('子任务服务未就绪');};
+  roleTask:(ctx:RunContext,args:any,caller:string)=>Promise<any>=async()=>{throw new Error('角色子任务服务未就绪');};
   specsFor(ctx:RunContext){return selectTools(toolSpecs(false),JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);}
   retrieval:Retrieval; desktop:Desktop;
   delegate:(engine:string,prompt:string,ctx:RunContext)=>Promise<string>=async()=>{throw new Error('委派服务未初始化');};
@@ -166,6 +168,15 @@ export class Tools {
     switch(name){
       case 'finish_task': {
         if(!['completed','blocked'].includes(a.outcome)||!Array.isArray(a.files)||a.files.some((f:any)=>typeof f!=='string'))throw new Error('完成声明格式错误');
+        if(a.outcome==='completed'){
+          const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');
+          const review=events.slice(Math.max(0,last)).findLast(e=>e.type==='agent_task_done'&&e.data.result.role==='reviewer');
+          if(review&&!review.data.result.passed)throw new Error('最近的独立验收未通过，请修订后重新验收，或明确报告 blocked：'+review.data.result.issues.join('；'));
+          if(review)for(const input of review.data.result.inputs){
+            const normalized=a.files.map((f:string)=>path.relative(ctx.task.workspace,path.resolve(ctx.task.workspace,f)).replaceAll('\\','/'));
+            if(normalized.includes(input.path)){const p=await safePath(ctx.task.workspace,input.path),content=await fs.readFile(p,'utf8');if(createHash('sha256').update(content).digest('hex')!==input.hash)throw new Error('交付文件在独立验收后发生变化，请重新验收：'+input.path);}
+          }
+        }
         const prompt=JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt;
         if(a.outcome==='completed'&&workbenchApplicationRequired(prompt,JSON.parse(ctx.task.options||'{}').maintenance===true)){const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');if(!events.slice(last<0?0:last).some(e=>e.type==='maintenance_applied'))throw new Error('用户要求修改工作台本身，但没有成功应用的维护记录。请使用 workbench_read 与 workbench_propose_change；只写任务目录文件不算修改应用，未应用应报告 blocked。');}
         if(a.outcome==='completed'&&requiresFileDelivery(prompt)&&!a.files.some((f:string)=>!/^\.?\/?(?:\.agent-reports\/|agent-result\.md$)/.test(f.replaceAll('\\','/'))))throw new Error('用户要求交付文件，请先实际创建或修改成果，再在 files 中声明用户成果；内部报告不能替代成果');
@@ -183,11 +194,12 @@ export class Tools {
       case 'read_file': {const p=await safePath(ctx.task.workspace,a.path),stat=await fs.stat(p);if(!stat.isFile()||stat.size>2_000_000)throw new Error('仅支持小于 2 MB 的文本文件');const text=await fs.readFile(p,'utf8');if(text.includes('\0'))throw new Error('该文件是二进制文件');const start=Math.max(0,a.offset||0),end=start+Math.min(a.limit||16000,30000);return {path:p,text:text.slice(start,end),total:text.length,truncated:end<text.length};}
       case 'write_file': {if(a.content.length>500000)throw new Error('单个成果超过 500 KB');if(/\.(?:md|markdown)$/i.test(a.path)&&!/[\r\n]/.test(a.content)&&/^(?:#{1,6}\s|[-*]\s)/.test(a.content)&&/\\n(?:\\n)*(?:#{1,6}\s|[-*]\s)/.test(a.content))throw new Error('Markdown 文档的结构换行被写成了字面反斜杠n，请使用真实换行字符重新提交内容，不要对整个文档重复转义。');const p=await safePath(ctx.task.workspace,a.path);await fs.mkdir(path.dirname(p),{recursive:true});await safePath(ctx.task.workspace,p);await fs.writeFile(p,a.content,{encoding:'utf8',signal:ctx.signal});ctx.emit('artifact',engine,{path:path.relative(ctx.task.workspace,p),bytes:Buffer.byteLength(a.content)});return {path:p,bytes:Buffer.byteLength(a.content)};}
       case 'search_files': {const hits:any[]=[];let scanned=0;const walk=async(dir:string)=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){ctx.signal.throwIfAborted();if(scanned>300||hits.length>=40)return;if(e.isSymbolicLink()||['node_modules','.git'].includes(e.name))continue;const p=await safePath(ctx.task.workspace,path.join(dir,e.name));if(e.isDirectory()){await walk(p);continue;}scanned++;const s=await fs.stat(p);if(s.size>300000)continue;const t=await fs.readFile(p,'utf8');if(t.includes('\0'))continue;const i=t.toLowerCase().indexOf(a.query.toLowerCase());if(i>=0)hits.push({path:path.relative(ctx.task.workspace,p),snippet:t.slice(Math.max(0,i-100),i+600)});}};await walk(ctx.task.workspace);return {hits,scanned};}
-      case 'tool_invoke': {if(['tool_invoke','delegate','research_subtask','finish_task'].includes(a.name))throw new Error('此工具必须直接调用，不能嵌套');return this.call(ctx,a.name,a.arguments,engine);}
+      case 'tool_invoke': {if(['tool_invoke','delegate','research_subtask','agent_task','finish_task'].includes(a.name))throw new Error('此工具必须直接调用，不能嵌套');return this.call(ctx,a.name,a.arguments,engine);}
       case 'browser_open': return this.browser.open(ctx,a.url);
       case 'browser_read': return this.browser.read(ctx,a.offset||0,a.controlsOffset||0);
       case 'browser_action': return this.browser.action(ctx,a,(c,action,detail)=>this.approval(c,action,detail));
       case 'research_subtask': return this.subtask(ctx,a.task,engine);
+      case 'agent_task': return this.roleTask(ctx,a,engine);
       case 'tool_result_read': {const row=this.store.db.prepare('SELECT result FROM operations WHERE id=? AND taskId=? AND status=?').get(a.operationId,ctx.task.id,'succeeded') as any;if(!row)throw new Error('本任务没有此工具结果');const offset=a.offset||0,limit=a.limit||12000;return {operationId:a.operationId,text:row.result.slice(offset,offset+limit),total:row.result.length,truncated:offset+limit<row.result.length};}
       case 'fetch_url': return publicFetch(a.url,ctx.signal);
       case 'web_search': {if(!a.query.trim()||a.query.length>1000)throw new Error('搜索词应为 1–1000 字符');return this.desktop.web(ctx,{query:a.query.trim()});}

@@ -14,6 +14,7 @@ import {recoveryDiagnosis} from './supervisor.ts';
 import {ModelRouter} from './model-router.ts';
 import {adaptiveExecution} from './adaptive-execution.ts';
 import {researchSubtask} from './subtasks.ts';
+import {roleTask} from './role-tasks.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
@@ -25,6 +26,7 @@ export class Agent extends EventEmitter {
     this.tools.delegate=(engine,prompt,ctx)=>this.engines.run(engine,prompt,ctx,true);
     this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
     this.tools.subtask=(ctx,goal,caller)=>{const result=this.subtaskTail.then(()=>researchSubtask(ctx,goal,caller,this.store,this.engines,this.router,c=>{if(this.active)this.active.ctx=c;}));this.subtaskTail=result.catch(()=>{});return result;};
+    this.tools.roleTask=(ctx,args,caller)=>{const result=this.subtaskTail.then(()=>roleTask(ctx,args,caller,this.store,this.engines,this.router,this.tools,c=>{if(this.active)this.active.ctx=c;}));this.subtaskTail=result.catch(()=>{});return result;};
   }
   emitEvent(taskId:string,type:string,engine:string,data:any){const e=this.store.event(taskId,type,engine,data);this.emit('event',e);}
   async enqueue(task:Task){const o=JSON.parse(task.options||'{}'),turnId=o.turnId||task.id;if(!this.store.events(task.id).some(e=>e.type==='user_message'&&e.data.turnId===turnId))this.emitEvent(task.id,'user_message','user',{text:o.currentPrompt||task.prompt,turnId});this.emitEvent(task.id,'status','system',{status:'queued',intent:o.intent,engine:task.engine});if(taskRoute(task).kind==='chat')void this.runChat(task);else void this.pump();}

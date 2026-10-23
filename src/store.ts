@@ -6,7 +6,9 @@ import type { Task, EventRecord, Engine } from './config.ts';
 
 export class Store {
   db: DatabaseSync;
+  directory:string;
   constructor(dir: string) {
+    this.directory=path.resolve(dir);
     mkdirSync(dir, { recursive: true });
     this.db = new DatabaseSync(path.join(dir, 'agent.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;

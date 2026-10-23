@@ -30,7 +30,7 @@ export class ModelRouter {
   const category=classifyTask(JSON.parse(task.options||'{}').currentPrompt||task.prompt);
   return (['qwen','harness','codex'] as ModelEngine[]).map(engine=>{const p=this.profile(task,engine),state=this.availability!.items[engine];return {engine,profile:p,available:state.available,unavailableReason:state.available?'':state.reason,observations:this.store.db.prepare('SELECT status,durationMs,rating FROM routing_samples WHERE category=? AND engine=? AND profile=? ORDER BY created DESC,rowid DESC LIMIT 40').all(category,engine,p) as any[]};});
  }
- async select(ctx:RunContext,exclude:string[]=[]){
+ async select(ctx:RunContext,exclude:string[]=[],purpose:'recovery'|'subtask'='recovery'){
   ctx.signal.throwIfAborted();const o=JSON.parse(ctx.task.options||'{}'),turnId=o.turnId||ctx.task.id;
   const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message'),current=events.slice(Math.max(0,last));
   // 同轮继续使用原决定，不因新增反馈重新选择并重放操作；明确的新用户消息才重选。
@@ -42,7 +42,7 @@ export class ModelRouter {
   if(!chosen)throw new Error('没有可用的执行模型，请检查模型连接；已有操作不会重放');
   const informed=chosen.ratings>0;
   const ideal=[...candidates].sort((a,b)=>b.score-a.score)[0];
-  const basis=exclude.length?'此前执行未完成，按剩余候选的适配度接续':ideal.engine!==chosen.engine&&!ideal.available?`${modelNames[ideal.engine]} 当前不可用，改选可用候选中更合适的模型`:chosen.engine==='codex'?'预期质量收益足以抵消更高的相对成本':chosen.engine==='harness'?'质量满足常规任务要求，优先节省 Codex 额度':'适合本地直接处理，节省云端额度';
+  const basis=exclude.length?(purpose==='subtask'?'按子任务的独立性和单并发约束排除不合适的模型，再比较质量与相对成本':'此前执行未完成，按剩余候选的适配度接续'):ideal.engine!==chosen.engine&&!ideal.available?`${modelNames[ideal.engine]} 当前不可用，改选可用候选中更合适的模型`:chosen.engine==='codex'?'预期质量收益足以抵消更高的相对成本':chosen.engine==='harness'?'质量满足常规任务要求，优先节省 Codex 额度':'适合本地直接处理，节省云端额度';
   const reason=ctx.task.engine!=='auto'?'遵循你指定的执行器，不自动换模型':`${categories[category]}：${basis}。${informed?'已参考同类任务的 '+chosen.ratings+' 次用户评价':'当前依据初始偏好，尚无同类用户评价'}。`;
   const decision={id:randomUUID(),turnId,engine:chosen.engine,category,preference:policy,profile:chosen.profile,reason,candidates,automatic:ctx.task.engine==='auto',feedbackEligible:ctx.chat===true||['adaptive','native'].includes(o.workflow?.mode||'adaptive'),basis:'偏好先验 + 同类别、同模型配置的本机记录；相对成本不是 API 报价'};
   ctx.emit('model_route','system',decision);return decision;
