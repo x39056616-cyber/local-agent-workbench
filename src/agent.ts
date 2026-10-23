@@ -13,15 +13,18 @@ import {taskRoute} from './routing.ts';
 import {recoveryDiagnosis} from './supervisor.ts';
 import {ModelRouter} from './model-router.ts';
 import {adaptiveExecution} from './adaptive-execution.ts';
+import {researchSubtask} from './subtasks.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
+  subtaskTail:Promise<any>=Promise.resolve();
   router:ModelRouter;chats=new Map<string,AbortController>();
   approvals=new Map<string,{resolve:(answer:boolean)=>void;taskId:string}>();
   constructor(store:Store,token:string){
     super();this.store=store;this.router=new ModelRouter(store);this.tools=new Tools(store);this.engines=new Engines(token,toolSpecs);
     this.tools.delegate=(engine,prompt,ctx)=>this.engines.run(engine,prompt,ctx,true);
     this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
+    this.tools.subtask=(ctx,goal,caller)=>{const result=this.subtaskTail.then(()=>researchSubtask(ctx,goal,caller,this.store,this.engines,this.router,c=>{if(this.active)this.active.ctx=c;}));this.subtaskTail=result.catch(()=>{});return result;};
   }
   emitEvent(taskId:string,type:string,engine:string,data:any){const e=this.store.event(taskId,type,engine,data);this.emit('event',e);}
   async enqueue(task:Task){const o=JSON.parse(task.options||'{}'),turnId=o.turnId||task.id;if(!this.store.events(task.id).some(e=>e.type==='user_message'&&e.data.turnId===turnId))this.emitEvent(task.id,'user_message','user',{text:o.currentPrompt||task.prompt,turnId});this.emitEvent(task.id,'status','system',{status:'queued',intent:o.intent,engine:task.engine});if(taskRoute(task).kind==='chat')void this.runChat(task);else void this.pump();}
@@ -41,6 +44,7 @@ export class Agent extends EventEmitter {
     const task=this.store.list().reverse().find(t=>t.status==='queued'&&!t.archived&&taskRoute(t).kind!=='chat');if(!task)return;
     const controller=new AbortController();
     const ctx:RunContext={task,signal:controller.signal,emit:(type,engine,data)=>this.emitEvent(task.id,type,engine,data),tool:(name,args,engine)=>this.tools.call(ctx,name,args,engine)};
+    ctx.specs=this.tools.specsFor(ctx);ctx.emit('tool_selection','system',{names:ctx.specs.map(s=>s.name),available:toolSpecs(false).length});
     this.active={id:task.id,controller,ctx};
     const timeout=setTimeout(()=>controller.abort(new Error('已达到任务时限')),this.store.setting('timeoutMinutes',30)*60000);
     this.store.update(task.id,{status:'running',error:''});ctx.emit('status','system',{status:'running'});
@@ -81,7 +85,7 @@ export class Agent extends EventEmitter {
       if(execution)this.router.record(ctx,execution.decision,'completed',execution.durationMs);
       this.store.update(task.id,{status:'succeeded',result:answer});ctx.emit('status','system',{status:'succeeded',result:answer});
     }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});if(!controller.signal.aborted){const diagnosis=recoveryDiagnosis(e);ctx.emit('failure_diagnosis','system',diagnosis);ctx.emit('message','system',{text:'任务尚未完成：'+message+'\n'+diagnosis.advice+' 已有记录和成果已保留。'});}ctx.emit('status','system',{status,error:message});}
-    finally{clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
+    finally{await this.tools.browser.close(task.id);clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }
   cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');
     if(this.chats.has(id)){this.chats.get(id)!.abort(new Error('用户停止了对话'));}
