@@ -9,8 +9,24 @@ import {initialModel,classifyTask,preference,rankModels} from '../src/model-poli
 import {taskRoute,researchKinds} from '../src/routing.ts';
 import {adaptiveExecution} from '../src/adaptive-execution.ts';
 import {Agent} from '../src/agent.ts';
+import {ModelRequestError} from '../src/model-request.ts';
 
 const available=(profile='one')=>['qwen','harness','codex'].map(engine=>({engine,profile,available:true,observations:[]})) as any;
+
+test('模型流超时后接管者读取已完成采集，不重启爬虫或命令',async()=>{
+ const f=await fixture();try{const calls:string[]=[];let read=false;
+ f.ctx.tool=async(name:string)=>{assert.equal(name,'crawl_read');read=true;return {text:'已保存的真实资料'};};
+ const result=await adaptiveExecution('整理已采集资料',f.ctx,f.store,f.router,async(engine,c)=>{
+  calls.push(engine);c.emit('engine_start',engine,{});
+  if(calls.length===1){c.emit('tool_start',engine,{id:'crawl',name:'crawl_start'});c.emit('tool_done',engine,{id:'crawl',name:'crawl_start',result:{jobId:'saved-job'}});c.emit('crawl_done',engine,{jobId:'saved-job',status:'completed'});throw new ModelRequestError('模型流式输出停滞超时','timeout');}
+  await assert.rejects(c.tool('crawl_start',{urls:['https://example.com']},engine),/接管只允许/);
+  await assert.rejects(c.tool('run_command',{},engine),/接管只允许/);
+  await c.tool('crawl_read',{jobId:'saved-job',url:'https://example.com'},engine);
+  c.emit('completion',engine,{outcome:'completed',summary:'接续完成',files:[]});return '接续完成';
+ },()=>{});
+ assert.equal(result.result,'接续完成');assert(read);assert.equal(calls.length,2);assert.equal(f.store.events(f.ctx.task.id).filter(e=>e.type==='auto_recovery').length,1);
+ }finally{await f.close();}
+});
 async function fixture(){const dir=await mkdtemp(path.join(os.tmpdir(),'la-model-router-')),store=new Store(dir),router=new ModelRouter(store);const task=store.create('帮我在github找这一个月内最受欢迎有关ai的3个开源项目，并分别向我说明他们为什么这么受欢迎','auto',dir);task.options=JSON.stringify({turnId:'one',intent:'task',workflow:{mode:'native'}});store.update(task.id,{options:task.options});store.event(task.id,'user_message','user',{text:task.prompt,turnId:'one'});const ctx:any={task,signal:new AbortController().signal,emit:(t:string,e:string,d:any)=>store.event(task.id,t,e,d),tool:async()=>({})};router.candidates=async t=>{const category=classifyTask(t.prompt);return available().map((c:any)=>({...c,observations:store.db.prepare('SELECT * FROM routing_samples WHERE category=? AND engine=? AND profile=?').all(category,c.engine,c.profile)}));};return {dir,store,router,ctx,close:async()=>{if(store.db.isOpen)store.close();await rm(dir,{recursive:true,force:true});}};}
 
 test('跨任务按质量收益和成本选择，不把 GitHub 开源项目检索误判成复杂代码',()=>{

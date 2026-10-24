@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {DeepSeekProvider,deepseekThinking} from './providers.ts';
 import {readChatStream} from './stream.ts';
+import {modelRequest} from './model-request.ts';
 import {waitForQwen} from './runtime.ts';
 import {compactMessages} from './context.ts';
 
@@ -27,7 +28,7 @@ function processEnv(ctx: RunContext, token: string): NodeJS.ProcessEnv {
 
 export class Engines {
   provider=new DeepSeekProvider(); qwenTail:Promise<any>=Promise.resolve();
-  async serialQwen<T>(fn:()=>Promise<T>,ctx:RunContext):Promise<T>{ctx.signal.throwIfAborted();const result=this.qwenTail.then(async()=>{ctx.signal.throwIfAborted();await waitForQwen(ctx.signal,()=>ctx.emit('context','qwen',{message:'本地 Qwen 正在准备，模型就绪后会继续；可以停止等待。'}));ctx.signal.throwIfAborted();return fn();});this.qwenTail=result.catch(()=>{});return new Promise<T>((resolve,reject)=>{const abort=()=>reject(ctx.signal.reason||new Error('任务已取消'));ctx.signal.addEventListener('abort',abort,{once:true});result.then(resolve,reject).finally(()=>ctx.signal.removeEventListener('abort',abort));if(ctx.signal.aborted)abort();});}
+  async serialQwen<T>(fn:()=>Promise<T>,ctx:RunContext):Promise<T>{ctx.signal.throwIfAborted();const queued=performance.now();ctx.emit('model_progress','qwen',{phase:'queued',elapsedMs:0});const result=this.qwenTail.then(async()=>{ctx.signal.throwIfAborted();const ready=performance.now();ctx.emit('model_progress','qwen',{phase:'preparing',queueMs:Math.round(ready-queued)});await waitForQwen(ctx.signal,()=>ctx.emit('context','qwen',{message:'本地 Qwen 正在准备，模型就绪后会继续；可以停止等待。'}));ctx.signal.throwIfAborted();ctx.emit('model_progress','qwen',{phase:'ready',queueMs:Math.round(ready-queued),prepareMs:Math.round(performance.now()-ready)});return fn();});this.qwenTail=result.catch(()=>{});return new Promise<T>((resolve,reject)=>{const abort=()=>reject(ctx.signal.reason||new Error('任务已取消'));ctx.signal.addEventListener('abort',abort,{once:true});result.then(resolve,reject).finally(()=>ctx.signal.removeEventListener('abort',abort));if(ctx.signal.aborted)abort();});}
   token: string; specs: (delegation:boolean)=>any[];
   constructor(token:string,specs:(delegation:boolean)=>any[]){this.token=token;this.specs=specs;}
   async chat(engine:string,prompt:string,ctx:RunContext):Promise<string>{
@@ -57,8 +58,8 @@ export class Engines {
     const messages:any[]=[{role:'system',content:ctx.stage?SYSTEM+'\n遵守受控阶段要求，仅使用本阶段工具，通过 submit_stage 提交结构化结果。':SYSTEM},{role:'user',content:prompt}];
     for(let i=0;i<30;i++){
       ctx.signal.throwIfAborted();if(compactMessages(messages))ctx.emit('context','harness',{message:'已压缩较早的完整工具调用组'});if(JSON.stringify(messages).length>100000)throw new Error('DeepSeek 上下文预算已达到，请缩小任务或续接');
-      const r=await this.provider.request('/chat/completions',{model,messages,tools:(ctx.specs??this.specs(false)).map(s=>({type:'function',function:s})),max_tokens:8192,stream:false,...deepseekThinking(profile.effort||'')},ctx.signal),data:any=await r.json(),message=data.choices?.[0]?.message;
-      if(!message)throw new Error('DeepSeek 没有有效回复');if(data.usage)ctx.emit('usage','harness',data.usage);if(message.content)ctx.emit('message','harness',{text:message.content});
+      const message=await modelRequest(ctx,'harness',{model,messages,tools:(ctx.specs??this.specs(false)).map(s=>({type:'function',function:s})),max_tokens:8192,...deepseekThinking(profile.effort||'')},(body,signal)=>this.provider.request('/chat/completions',body,signal));
+      if(message.content)ctx.emit('message','harness',{text:message.content});
       // 官方思考工具模式要求回传 reasoning_content；仅在当前请求内存保留，不写日志。
       messages.push(message);if(!message.tool_calls?.length)return message.content||'';
       for(const call of message.tool_calls){ctx.signal.throwIfAborted();let result:any;try{result=await ctx.tool(call.function.name,JSON.parse(call.function.arguments),'harness');}catch(e){result={error:errorText(e)};}messages.push({role:'tool',tool_call_id:call.id,content:JSON.stringify(result)});if(call.function.name==='submit_stage'&&result?.accepted)return '结构化结果已提交';if(call.function.name==='finish_task'&&result?.recorded)return '任务结果已提交';}
@@ -88,14 +89,7 @@ export class Engines {
       ctx.signal.throwIfAborted();
       if(compactMessages(messages))ctx.emit('context','qwen',{message:'已压缩较早的完整工具调用组；原始目标与最近调用保留，长结果可按 operationId 回看。'});
       if(JSON.stringify(messages).length>90000)throw new Error('Qwen 上下文预算已达到，请分段处理资料');
-      let response:Response|undefined;
-      for(let attempt=0;attempt<3;attempt++){
-        try {response=await fetch(config.qwenBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:config.qwenModel,messages,tools:(ctx.specs??this.specs(false)).map(s=>({type:'function',function:s})),tool_choice:'auto',max_tokens:4096,stream:false,...(reasoning?{reasoning_effort:reasoning}:{})}),signal:ctx.signal});if(response.status>=500 && attempt<2){await response.body?.cancel();continue;}break;}catch(e){if(ctx.signal.aborted||attempt===2)throw new Error('Qwen 请求失败：'+errorText(e));}
-      }
-      if(!response?.ok)throw new Error('Qwen 返回 HTTP '+response?.status);
-      const data:any=await response.json(), message=data.choices?.[0]?.message;
-      if(!message)throw new Error('Qwen 没有返回有效消息');
-      if(data.usage)ctx.emit('usage','qwen',data.usage);
+      const message=await modelRequest(ctx,'qwen',{model:config.qwenModel,messages,tools:(ctx.specs??this.specs(false)).map(s=>({type:'function',function:s})),tool_choice:'auto',max_tokens:4096,...(reasoning?{reasoning_effort:reasoning}:{})},(body,signal)=>fetch(config.qwenBase+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal}));
       if(message.content)ctx.emit('message','qwen',{text:message.content});
       messages.push(message);
       if(!message.tool_calls?.length){if(textOnlyRetries++<1){messages.push({role:'user',content:ctx.stage?'本阶段尚未实际完成工具工作。请按本阶段目标使用当前实际提供的读取或写入工具取得成果与证据，再调用 submit_stage；只输出计划或承诺不能结束本阶段。':'本次是工具任务，你已获得共享工具。不要因本地模型身份声称不能联网：可用 web_search、web_read、fetch_url、tools_search、skill_read、desktop_search。先实际完成所需操作，再调用 finish_task；真实无法完成则明确 blocked。'});continue;}return message.content || '';}

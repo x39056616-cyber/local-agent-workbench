@@ -2,6 +2,7 @@ import {existsSync,readFileSync,mkdirSync,writeFileSync,copyFileSync,renameSync,
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import {config} from './config.ts';
+import {ModelRequestError} from './model-request.ts';
 import {ProxyAgent,fetch as proxyFetch} from 'undici';
 
 export const deepseekEfforts=['off','minimal','low','medium','high','xhigh','ultra','max'];
@@ -41,7 +42,7 @@ export class DeepSeekProvider {
   async request(route:string,body?:any,signal?:AbortSignal){
     const d=this.read(),key=await this.key(),options:any={method:body?'POST':'GET',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},signal:signal?AbortSignal.any([signal,AbortSignal.timeout(120000)]):AbortSignal.timeout(20000),...(body?{body:JSON.stringify(body)}:{})};
     if(config.webProxy&&!['localhost','127.0.0.1'].includes(new URL(d.baseUrl).hostname)){this.proxy??=new ProxyAgent(config.webProxy);options.dispatcher=this.proxy;}
-    const r=await proxyFetch(d.baseUrl+route,options);if(!r.ok){await r.body?.cancel();throw new Error('DeepSeek API HTTP '+r.status+(r.status===401?'：密钥无效或已失效':r.status===402?'：账号余额不足':''));}return r;
+    const r=await proxyFetch(d.baseUrl+route,options);if(!r.ok){await r.body?.cancel();throw new ModelRequestError('DeepSeek API HTTP '+r.status+(r.status===401?'：密钥无效或已失效':r.status===402?'：账号余额不足':''),[408,429,500,502,503,504].includes(r.status)?'transient':'configuration',r.status,new Headers(r.headers as any));}return r;
   }
   async test(){const r=await this.request('/models'),data:any=await r.json();const models=data.data?.filter((m:any)=>typeof m.id==='string').map((m:any)=>m.id);if(!models?.length)throw new Error('API 未返回模型目录');const d=this.read();writeFileSync(this.file,JSON.stringify({...d,models,verifiedAt:new Date().toISOString()},null,2));return this.status();}
 }

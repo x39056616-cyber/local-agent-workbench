@@ -1,3 +1,4 @@
+import {toolResponse} from './sse-fixture.ts';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,rm,readFile} from 'node:fs/promises';
@@ -34,10 +35,10 @@ test('流式正文正确跨分片解析，不把 reasoning_content 发到网页'
 });
 test('Qwen 串行队列允许取消等待中的请求，取消后不再启动模型',async()=>{
  const engine=new Engines('',toolSpecs),abort=new AbortController(),calls:string[]=[];let release!:()=>void;
- const blocked=new Promise<void>(r=>release=r),first=engine.serialQwen(async()=>{calls.push('first');await blocked;return 'first';},{signal:new AbortController().signal} as any);
- const second=engine.serialQwen(async()=>{calls.push('second');return 'second';},{signal:abort.signal} as any);abort.abort(new Error('取消排队'));
+ const blocked=new Promise<void>(r=>release=r),first=engine.serialQwen(async()=>{calls.push('first');await blocked;return 'first';},{signal:new AbortController().signal,emit:()=>{}} as any);
+ const second=engine.serialQwen(async()=>{calls.push('second');return 'second';},{signal:abort.signal,emit:()=>{}} as any);abort.abort(new Error('取消排队'));
  try{await assert.rejects(Promise.race([second,new Promise((_,reject)=>setTimeout(()=>reject(new Error('取消未及时生效')),300))]),/取消排队/);}finally{release();await first;}
- await engine.serialQwen(async()=>{calls.push('third');return 'third';},{signal:new AbortController().signal} as any);assert.deepEqual(calls,['first','third']);
+ await engine.serialQwen(async()=>{calls.push('third');return 'third';},{signal:new AbortController().signal,emit:()=>{}} as any);assert.deepEqual(calls,['first','third']);
 });
 test('DeepSeek 密钥系统加密、状态不回显、模型发现和认证错误可验证',async t=>{
  if(process.platform!=='win32')return t.skip('DPAPI 仅适用于 Windows');
@@ -47,7 +48,7 @@ test('DeepSeek 密钥系统加密、状态不回显、模型发现和认证错�
 });
 test('DeepSeek API 原生调用工具并回传结果和思考字段，不把密钥或思考内容记入事件',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-api-loop-'));let requests=0;const bodies:any[]=[],events:any[]=[],tools:any[]=[];
- const server=http.createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);bodies.push(body);assert.equal(req.headers.authorization,'Bearer fixture-token-local');requests++;const message=requests===1?{role:'assistant',content:null,reasoning_content:'hidden-test-reasoning',tool_calls:[{id:'one',type:'function',function:{name:'write_file',arguments:JSON.stringify({path:'out.md',content:'真实协议测试'})}}]}:{role:'assistant',content:'完成',tool_calls:[{id:'two',type:'function',function:{name:'finish_task',arguments:JSON.stringify({outcome:'completed',summary:'完成',files:['out.md']})}}]};res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message}],usage:{prompt_tokens:100,completion_tokens:10}}));});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
+ const server=http.createServer(async(req,res)=>{let raw='';for await(const c of req)raw+=c;const body=JSON.parse(raw);bodies.push(body);assert.equal(req.headers.authorization,'Bearer fixture-token-local');requests++;const message=requests===1?{role:'assistant',content:null,reasoning_content:'hidden-test-reasoning',tool_calls:[{id:'one',type:'function',function:{name:'write_file',arguments:JSON.stringify({path:'out.md',content:'真实协议测试'})}}]}:{role:'assistant',content:'完成',tool_calls:[{id:'two',type:'function',function:{name:'finish_task',arguments:JSON.stringify({outcome:'completed',summary:'完成',files:['out.md']})}}]};res.setHeader('Content-Type','text/event-stream');res.end(toolResponse({choices:[{message}],usage:{prompt_tokens:100,completion_tokens:10}}));});await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));
  try{const p=new DeepSeekProvider(dir);p.read=()=>({mode:'api',model:'deepseek-v4-pro',baseUrl:'http://127.0.0.1:'+(server.address() as any).port+'/v1'});p.key=async()=> 'fixture-token-local';const engine=new Engines('',toolSpecs);engine.provider=p;
  const ctx:any={task:{id:'fixture',options:JSON.stringify({harness:{model:'deepseek-v4-pro',effort:'medium'}})},onCompleted:()=>{},signal:new AbortController().signal,emit:(...e:any[])=>events.push(e),tool:async(n:string,a:any)=>{tools.push({n,a});return {recorded:true};}};
  await engine.run('harness','协议测试',ctx);assert.equal(requests,2);assert.equal(bodies[0].reasoning_effort,'high');assert.equal(bodies[1].messages[2].reasoning_content,'hidden-test-reasoning');assert.equal(bodies[1].messages[3].role,'tool');assert.equal(tools.length,2);assert(!JSON.stringify(events).includes('fixture-token-local'));assert(!JSON.stringify(events).includes('hidden-test-reasoning'));

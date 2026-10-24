@@ -4,13 +4,16 @@ import {randomUUID} from 'node:crypto';
 import type {RunContext} from './config.ts';
 import type {Store} from './store.ts';
 import {safePath} from './tools.ts';
+import {ModelRequestError} from './model-request.ts';
 
-const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read']);
+const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','tool_result_read']);
 export const recoveryTools=new Set([...readOnly,'write_file','plan_update','finish_task']);
 const names:Record<string,string>={qwen:'Qwen',harness:'DeepSeek',codex:'Codex'};
 
 export function recoveryDiagnosis(error:unknown){
  const reason=error instanceof Error?error.message:String(error);
+ if(error instanceof ModelRequestError){const recoverable=error.kind!=='configuration';return {category:'model-'+error.kind,recoverable,reason,advice:recoverable?'模型请求已停止，保留已完成的工具结果，按权限与预算判断能否接续。':'修正模型、密钥、余额或请求配置后再继续，不自动重试。'};}
+ if(/HTTP\s*(400|401|402|403|404|405|422)\b|余额不足|模型不存在|model.*not found/i.test(reason))return {category:'configuration',recoverable:false,reason,advice:'检查模型名称、接入地址、余额或凭据，重复请求不能修复这类错误。'};
  if(/用户停止|取消|时限|任务超时/.test(reason))return {category:'stopped',recoverable:false,reason,advice:'已停止，不会自动重新启动任务。'};
  if(/拒绝|禁止|越界|权限|审批|401|403|密钥|认证|credential|unauthorized/i.test(reason))return {category:'permission',recoverable:false,reason,advice:'需要明确授权或修正连接配置；不会换模型绕过限制。'};
  if(/副作用|重复|不同方案|未确认/.test(reason))return {category:'uncertain-operation',recoverable:false,reason,advice:'先核对已执行操作及现有成果，不能自动重放结果不明的操作。'};
@@ -22,7 +25,19 @@ export function recoveryDiagnosis(error:unknown){
 export function safeToHandoff(events:any[]){
  if(events.some(e=>e.type==='native_tool'&&!['userMessage','reasoning'].includes(e.data.type)))return false;
  const starts=events.filter(e=>e.type==='tool_start');
- return starts.every(e=>recoveryTools.has(e.data.name)&&events.some(end=>['tool_done','tool_error'].includes(end.type)&&end.data.id===e.data.id));
+ return starts.every(e=>{
+  const end=events.find(end=>['tool_done','tool_error'].includes(end.type)&&end.data.id===e.data.id);
+  if(end?.type==='tool_done'&&['crawl_start','crawl_resume','crawl_stop'].includes(e.data.name)){
+   const jobId=end.data.result?.jobId;
+   const state=events.findLast(v=>['crawl_start','crawl_done'].includes(v.type)&&v.data.jobId===jobId);
+   return !!jobId&&state?.type==='crawl_done'&&['completed','partial','limited','paused','failed','interrupted'].includes(state.data.status);
+  }
+  if(!end||!recoveryTools.has(e.data.name))return false;
+  // A failed write may have partially modified a file; an error is not proof of rollback.
+  if(end.type==='tool_error'&&!readOnly.has(e.data.name))return false;
+  if(end.type==='tool_error'&&/拒绝|禁止|权限|审批|越界/i.test(String(end.data.error)))return false;
+  return true;
+ });
 }
 
 export class Supervisor {

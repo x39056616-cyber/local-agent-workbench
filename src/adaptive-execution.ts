@@ -31,6 +31,7 @@ export async function adaptiveExecution(prompt:string,ctx:RunContext,store:Store
   }catch(error){
    router.record(ctx,decision,'failed',performance.now()-start,error);tried.push(decision.engine);
    const operations=store.events(ctx.task.id,after),diagnosis=recoveryDiagnosis(error);
+   ctx.emit('failure_diagnosis',decision.engine,diagnosis);
    const recoveries=new Supervisor(store,ctx).events().filter(e=>e.type==='auto_recovery');
    if(ctx.task.engine!=='auto'||ctx.signal.aborted||!diagnosis.recoverable||!safeToHandoff(operations)||tried.length>=3||recoveries.length>=2||recoveries.some(e=>e.data.id==='adaptive.execute.'+tried.length))throw error;
    const next=await router.select(ctx,tried);
