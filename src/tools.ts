@@ -19,10 +19,12 @@ import {workbenchApplicationRequired} from './maintenance-intent.ts';
 import {BrowserTools} from './browser.ts';
 import {selectTools} from './tool-selection.ts';
 import {CrawlService} from './crawler.ts';
+import {imageInput} from './image-input.ts';
 
 const str=(description:string)=>({type:'string',description});
 const spec=(name:string,description:string,properties:any,required:string[]=[])=>({name,description,parameters:{type:'object',properties,required,additionalProperties:false}});
 const specs=[
+  spec('image_analyze','使用本地 Qwen 的视觉模型实际识别工作区 PNG、JPEG、WebP 图片，返回内容描述或识别文字。不要用 read_file 读取图片二进制；无需云端上传。',{path:str('任务目录内的图片相对路径'),question:str('需要从图片确认的具体内容，默认描述图片并识别可见文字')},['path']),
   spec('crawl_start','批量采集公开网页，由后端 Crawlee 调度，遵守 robots.txt、站点范围与页数预算。返回 jobId；完成前可 crawl_status 等待，之后必须 crawl_read 阅读正文再总结。自动导出 JSON、Markdown、CSV。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},maxPages:{type:'integer',minimum:1,maximum:30},maxDepth:{type:'integer',minimum:0,maximum:3},mode:{type:'string',enum:['http','auto','browser']}},['urls']),
   spec('crawl_status','查询本任务采集进度与来源目录；省略 jobId 列出已有采集，重启后先查再恢复。waitMs 最多 10000，按 nextPagesOffset 翻目录。目录不能替代正文阅读。',{jobId:str('crawl_start 返回的 ID'),waitMs:{type:'integer',minimum:0,maximum:10000},pagesOffset:{type:'integer',minimum:0}}),
   spec('crawl_read','读取已成功采集的单页正文，每次最多 8000 字符；按 nextOffset 继续。可在恢复后读取本任务已保存来源。',{jobId:str('采集 ID'),url:str('目录中的原始 url'),offset:{type:'integer',minimum:0}},['jobId','url']),
@@ -118,7 +120,8 @@ export class Tools {
   crawler:CrawlService;
   subtask:(ctx:RunContext,goal:string,caller:string)=>Promise<any>=async()=>{throw new Error('子任务服务未就绪');};
   roleTask:(ctx:RunContext,args:any,caller:string)=>Promise<any>=async()=>{throw new Error('角色子任务服务未就绪');};
-  specsFor(ctx:RunContext){return selectTools(toolSpecs(false),JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt);}
+  vision:(ctx:RunContext,image:any,question:string)=>Promise<string>=async()=>{throw new Error('本地视觉服务未就绪');};
+  specsFor(ctx:RunContext){const images=this.store.events(ctx.task.id).filter(e=>e.type==='attachment'&&/\.(?:png|jpe?g|webp)$/i.test(e.data.path||'')).map(e=>e.data.path);return selectTools(toolSpecs(false),(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt)+'\n'+images.join('\n'));}
   retrieval:Retrieval; desktop:Desktop;
   delegate:(engine:string,prompt:string,ctx:RunContext)=>Promise<string>=async()=>{throw new Error('委派服务未初始化');};
   approval:(ctx:RunContext,action:string,detail:any)=>Promise<boolean>=async()=>false;
@@ -175,6 +178,11 @@ export class Tools {
     if(requestsWorkbenchChange(userPrompt)&&name==='run_command')throw new Error('修改工作台网页请使用受控维护入口；不通过资料任务命令修改应用。隔离检查由后端维护服务执行。');
     if(name==='run_command'&&/(?:不要|不得|禁止|不能|不允许|无需|不(?:需要|用)?)(?:运行|执行|调用)(?:任何|系统|沙箱)?命令|do not (?:run|execute) (?:any )?commands/i.test(userPrompt))throw new Error('用户明确禁止运行命令，本任务不会发起命令审批或执行。');
     switch(name){
+      case 'image_analyze': {
+        if(a.question&&a.question.length>4000)throw new Error('图片问题最多 4000 字符');
+        const image=await imageInput(ctx,a.path,safePath),text=await this.vision(ctx,image,a.question||'简要说明图片主体和关键文字，不逐行转写整张图。不确定的细节请明确说明。');
+        return {path:image.path,mime:image.mime,bytes:image.bytes,hash:image.hash,engine:'qwen',text};
+      }
       case 'finish_task': {
         if([...this.crawler.active.values()].some(a=>a.taskId===ctx.task.id))throw new Error('采集仍在运行，请 crawl_status 等待，或 crawl_stop 保存进度后再交付');
         if(!['completed','blocked'].includes(a.outcome)||!Array.isArray(a.files)||a.files.some((f:any)=>typeof f!=='string'))throw new Error('完成声明格式错误');
@@ -201,7 +209,7 @@ export class Tools {
         ctx.emit('plan',engine,{steps:a.steps});return {saved:true};
       }
       case 'list_files': {const dir=await safePath(ctx.task.workspace,a.path||'.');const entries=await fs.readdir(dir,{withFileTypes:true});return entries.slice(0,200).map(e=>({name:e.name,directory:e.isDirectory()}));}
-      case 'read_file': {const p=await safePath(ctx.task.workspace,a.path),stat=await fs.stat(p);if(!stat.isFile()||stat.size>2_000_000)throw new Error('仅支持小于 2 MB 的文本文件');const text=await fs.readFile(p,'utf8');if(text.includes('\0'))throw new Error('该文件是二进制文件');const start=Math.max(0,a.offset||0),end=start+Math.min(a.limit||16000,30000);return {path:p,text:text.slice(start,end),total:text.length,truncated:end<text.length};}
+      case 'read_file': {if(/\.(?:png|jpe?g|webp)$/i.test(a.path))throw new Error('这是图片文件，请用 image_analyze 实际识图；read_file 只读取文本。');const p=await safePath(ctx.task.workspace,a.path),stat=await fs.stat(p);if(!stat.isFile()||stat.size>2_000_000)throw new Error('仅支持小于 2 MB 的文本文件');const text=await fs.readFile(p,'utf8');if(text.includes('\0'))throw new Error('该文件是二进制文件');const start=Math.max(0,a.offset||0),end=start+Math.min(a.limit||16000,30000);return {path:p,text:text.slice(start,end),total:text.length,truncated:end<text.length};}
       case 'write_file': {if(a.content.length>500000)throw new Error('单个成果超过 500 KB');if(/\.(?:md|markdown)$/i.test(a.path)&&!/[\r\n]/.test(a.content)&&/^(?:#{1,6}\s|[-*]\s)/.test(a.content)&&/\\n(?:\\n)*(?:#{1,6}\s|[-*]\s)/.test(a.content))throw new Error('Markdown 文档的结构换行被写成了字面反斜杠n，请使用真实换行字符重新提交内容，不要对整个文档重复转义。');const p=await safePath(ctx.task.workspace,a.path);await fs.mkdir(path.dirname(p),{recursive:true});await safePath(ctx.task.workspace,p);await fs.writeFile(p,a.content,{encoding:'utf8',signal:ctx.signal});ctx.emit('artifact',engine,{path:path.relative(ctx.task.workspace,p),bytes:Buffer.byteLength(a.content)});return {path:p,bytes:Buffer.byteLength(a.content)};}
       case 'search_files': {const hits:any[]=[];let scanned=0;const walk=async(dir:string)=>{for(const e of await fs.readdir(dir,{withFileTypes:true})){ctx.signal.throwIfAborted();if(scanned>300||hits.length>=40)return;if(e.isSymbolicLink()||['node_modules','.git'].includes(e.name))continue;const p=await safePath(ctx.task.workspace,path.join(dir,e.name));if(e.isDirectory()){await walk(p);continue;}scanned++;const s=await fs.stat(p);if(s.size>300000)continue;const t=await fs.readFile(p,'utf8');if(t.includes('\0'))continue;const i=t.toLowerCase().indexOf(a.query.toLowerCase());if(i>=0)hits.push({path:path.relative(ctx.task.workspace,p),snippet:t.slice(Math.max(0,i-100),i+600)});}};await walk(ctx.task.workspace);return {hits,scanned};}
       case 'tool_invoke': {if(['tool_invoke','delegate','research_subtask','agent_task','finish_task'].includes(a.name))throw new Error('此工具必须直接调用，不能嵌套');return this.call(ctx,a.name,a.arguments,engine);}

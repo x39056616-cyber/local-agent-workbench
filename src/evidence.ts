@@ -12,6 +12,7 @@ export class EvidenceLedger {
   const add=(ref:string,kind:'web'|'local',text:any)=>{if(typeof text==='string'&&text.trim()){const key=kind+':'+ref,previous=this.sources.get(key)?.text;this.sources.set(key,{ref,kind,text:(previous&&previous!==text?previous+'\n'+text:text).slice(0,60000),tool:name});}};
   if(['fetch_url','web_read','browser_open','browser_read','browser_action','crawl_read'].includes(name)&&typeof result?.url==='string')add(result.url,'web',result.text);
   if(name==='workbench_read'&&typeof result?.path==='string')add('workbench:'+result.path,'local',result.text);
+  if(name==='image_analyze'&&typeof result?.path==='string')add(result.path.replaceAll('\\','/'),'local',result.text);
   if(name==='read_file'&&typeof result?.path==='string')add(path.relative(this.workspace,path.resolve(this.workspace,result.path)).replaceAll('\\','/'),'local',result.total===0?'[已实际读取：文件为空]':result.text);
   if(name==='search_files')for(const h of result?.hits||[])if(typeof h.path==='string')add(h.path.replaceAll('\\','/'),'local',h.snippet);
   if(['knowledge_search','memory_search'].includes(name))for(const h of result?.hits||[])if(typeof h.source==='string')add('knowledge:'+h.source+':'+(h.part||0),'local',h.text);

@@ -24,6 +24,7 @@ export class Agent extends EventEmitter {
   constructor(store:Store,token:string){
     super();this.store=store;this.router=new ModelRouter(store);this.tools=new Tools(store);this.engines=new Engines(token,toolSpecs);
     this.tools.delegate=(engine,prompt,ctx)=>this.engines.run(engine,prompt,ctx,true);
+    this.tools.vision=(ctx,image,question)=>this.engines.analyzeImage(ctx,image,question);
     this.tools.approval=(ctx,action,detail)=>this.approve(ctx,action,detail);
     this.tools.subtask=(ctx,goal,caller)=>{const result=this.subtaskTail.then(()=>researchSubtask(ctx,goal,caller,this.store,this.engines,this.router,c=>{if(this.active)this.active.ctx=c;}));this.subtaskTail=result.catch(()=>{});return result;};
     this.tools.roleTask=(ctx,args,caller)=>{const result=this.subtaskTail.then(()=>roleTask(ctx,args,caller,this.store,this.engines,this.router,this.tools,c=>{if(this.active)this.active.ctx=c;}));this.subtaskTail=result.catch(()=>{});return result;};

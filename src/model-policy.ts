@@ -1,4 +1,5 @@
 // 前后端共用的初始策略；数值是偏好先验，不是基准成绩或 API 报价。
+import {requestsCrawl} from './crawl-intent.ts';
 export const modelNames:Record<string,string>={qwen:'本地 Qwen',harness:'DeepSeek',codex:'Codex'};
 export type ModelEngine='qwen'|'harness'|'codex';
 export type Preference='balanced'|'quality'|'economy';
@@ -11,9 +12,10 @@ export function classifyTask(text:string):Category{
  const engineering=/(?:修改|修复|实现|构建|开发|重构|调试|排查|优化|迁移|部署|编写|fix|implement|refactor|debug|build|write)/i.test(p);
  if(engineering&&/(?:跨文件|多文件|架构|并发|竞态|死锁|事务|数据迁移|鉴权|认证漏洞|安全漏洞|生产故障|整个项目|大型|分布式|回归|race condition|multi.file|deadlock)/i.test(p))return 'complex_code';
  if(engineering&&/(?:代码|程序|脚本|网站|网页|应用|界面|组件|接口|前端|后端|bug|python|typescript|javascript|react|\.tsx?\b|\.py\b)/i.test(p))return 'code';
+ if(requestsCrawl(p))return 'research';
  if(/(?:联网|调研|搜集|搜索|查找|查阅|采集|抓取|爬取|帮我找|查一下|最新|本月|这一个月|近[一\d]+[天月周])/.test(p)&&/(?:github|项目|资料|新闻|文献|论文|来源|网站|网页|趋势|热榜|资讯)/i.test(p)||/https?:\/\//i.test(p))return 'research';
  if(/(?:严格证明|数学证明|复杂推理|深入推理|形式化证明|证明定理|prove.*theorem)/i.test(p))return 'reasoning';
- if(/(?:提取|分类|去重|格式转换|转成|转换为|总结以下|总结这段|摘要|整理附件|读取附件|文本词频)/.test(p))return 'extract';
+ if(/(?:提取|分类|去重|格式转换|转成|转换为|总结以下|总结这段|摘要|整理附件|读取附件|文本词频|识图|看图|截图|照片|图片|附件文件：|\.(?:png|jpe?g|webp)\b)/i.test(p))return 'extract';
  if(/(?:撰写|写一|报告|文章|文案|分析|比较|方案|建议|翻译|总结)/.test(p)||p.length>600)return 'writing';
  return 'chat';
 }

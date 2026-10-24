@@ -133,7 +133,8 @@ const server=http.createServer(async(req,res)=>{
             const current=input.prompt.slice(0,10000),history=[...(prior.conversation||[]),{role:'user',content:prior.currentPrompt||task.prompt},...(task.result?[{role:'assistant',content:task.result}]:[])].slice(-12);
             const engine=input.engine||task.engine;if(!['auto','qwen','harness','codex'].includes(engine))throw new Error('执行器无效');
             const requestedIntent=input.intent||prior.requestedIntent||'auto';if(!['auto','chat','task'].includes(requestedIntent))throw new Error('任务类型无效');
-            const continuingFiles=prior.intent==='task'&&/继续|再改|改成|补充|优化|调整|再生成|这个文件|该文件|刚才的文件|上面的文件/.test(current);
+            const hasImages=store.events(task.id).some(e=>e.type==='attachment'&&/\.(?:png|jpe?g|webp)$/i.test(e.data.path||''));
+            const continuingFiles=prior.intent==='task'&&(/继续|再改|改成|补充|优化|调整|再生成|这个文件|该文件|刚才的文件|上面的文件/.test(current)||hasImages&&/图片|照片|截图|图中|附件|看清|识别|这是什么|这个呢|那这|刚才/.test(current));
             const maintenance=maintenanceScope(current,prior.maintenance===true);
             const workflow=validateWorkflow(input.workflow||prior.workflow,engine),chat=taskRoute({prompt:current,engine,hasAttachments:continuingFiles,options:JSON.stringify({intent:requestedIntent,workflow,maintenance})}).kind==='chat';
             const routingPreference=preference(input.routingPreference??prior.routingPreference??store.setting('routingPreference','balanced'));
