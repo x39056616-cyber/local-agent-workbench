@@ -27,10 +27,12 @@ export function safeToHandoff(events:any[]){
  const starts=events.filter(e=>e.type==='tool_start');
  return starts.every(e=>{
   const end=events.find(end=>['tool_done','tool_error'].includes(end.type)&&end.data.id===e.data.id);
+  if(!end&&e.data.name==='crawl_start')return events.some(v=>v.type==='crawl_interrupted'&&v.data.operationId===e.data.id&&v.data.jobId&&v.data.status==='interrupted');
+  if(end?.type==='tool_error'&&e.data.name==='crawl_start'&&/需要 1–8 个起始 URL|页数 1–30、深度 0–3/.test(end.data.error||''))return true;
   if(end?.type==='tool_done'&&['crawl_start','crawl_resume','crawl_stop'].includes(e.data.name)){
    const jobId=end.data.result?.jobId;
-   const state=events.findLast(v=>['crawl_start','crawl_done'].includes(v.type)&&v.data.jobId===jobId);
-   return !!jobId&&state?.type==='crawl_done'&&['completed','partial','limited','paused','failed','interrupted'].includes(state.data.status);
+   const state=events.findLast(v=>['crawl_start','crawl_done','crawl_interrupted'].includes(v.type)&&v.data.jobId===jobId);
+   return !!jobId&&['crawl_done','crawl_interrupted'].includes(state?.type||'')&&['completed','partial','limited','paused','failed','interrupted'].includes(state?.data.status);
   }
   if(!end||!recoveryTools.has(e.data.name))return false;
   // A failed write may have partially modified a file; an error is not proof of rollback.

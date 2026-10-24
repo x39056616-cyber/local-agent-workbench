@@ -44,7 +44,15 @@ export class CrawlService {
   this.store=store;store.db.exec(`CREATE TABLE IF NOT EXISTS crawl_jobs(id TEXT PRIMARY KEY,taskId TEXT,turnId TEXT,key TEXT,options TEXT,status TEXT,created TEXT,updated TEXT,error TEXT DEFAULT '',files TEXT DEFAULT '[]');
    CREATE INDEX IF NOT EXISTS crawl_task ON crawl_jobs(taskId,key);
    CREATE TABLE IF NOT EXISTS crawl_pages(jobId TEXT,url TEXT,depth INTEGER,state TEXT,attempts INTEGER DEFAULT 0,finalUrl TEXT DEFAULT '',title TEXT DEFAULT '',text TEXT DEFAULT '',links TEXT DEFAULT '[]',hash TEXT DEFAULT '',duplicateOf TEXT DEFAULT '',fetchedAt TEXT DEFAULT '',error TEXT DEFAULT '',truncated INTEGER DEFAULT 0,PRIMARY KEY(jobId,url));`);
+  const interrupted=store.db.prepare("SELECT id,taskId FROM crawl_jobs WHERE status IN ('running','queued')").all() as any[];
   store.db.exec("UPDATE crawl_jobs SET status='interrupted',error='服务退出，已保存队列；需显式恢复' WHERE status IN ('running','queued'); UPDATE crawl_pages SET state='pending' WHERE state='inflight';");
+  for(const job of interrupted){
+   const events=store.events(job.taskId),launched=events.find(e=>e.type==='crawl_start'&&e.data.jobId===job.id);
+   const operation=launched?events.filter(e=>e.id<launched.id&&e.type==='tool_start').at(-1):undefined;
+   const operationId=operation?.data.name==='crawl_start'&&!events.some(e=>['tool_done','tool_error'].includes(e.type)&&e.data.id===operation.data.id)?operation.data.id:undefined;
+   if(operationId)store.db.prepare("UPDATE operations SET status='interrupted' WHERE id=? AND status='running'").run(operationId);
+   store.event(job.taskId,'crawl_interrupted','system',{jobId:job.id,operationId,status:'interrupted',note:'服务退出，采集队列已落盘；未完成的调用不冒充成功。请按原 jobId 恢复或读取已有结果。'});
+  }
  }
  owned(ctx:RunContext,id:string):Job {if(typeof id!=='string')throw new Error('缺少采集任务 ID');const j=this.store.db.prepare('SELECT * FROM crawl_jobs WHERE id=? AND taskId=?').get(id,ctx.task.id);if(!j)throw new Error('当前任务没有这个采集任务');return j;}
  patch(id:string,status:string,error=''){this.store.db.prepare('UPDATE crawl_jobs SET status=?,error=?,updated=? WHERE id=?').run(status,error,new Date().toISOString(),id);}

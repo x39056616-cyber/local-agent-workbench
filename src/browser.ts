@@ -39,6 +39,7 @@ export class BrowserTools {
     if(req.headers().origin)headers.origin=req.headers().origin;
     if(req.headers()['content-type'])headers['content-type']=req.headers()['content-type'];
     const response=await request(target,{dispatcher,method:req.method() as any,headers,body:req.postDataBuffer()||undefined,signal:ctx.signal,headersTimeout:20000,bodyTimeout:20000});
+     response.body.on('error',()=>{});
     const chunks:Buffer[]=[];let bytes=0;for await(const chunk of response.body){bytes+=chunk.length;if(bytes>5_000_000){response.body.destroy();throw new Error('浏览器资源超过 5 MB');}chunks.push(Buffer.from(chunk));}
     const out:Record<string,string>={};for(const key of ['content-type','location','access-control-allow-origin','access-control-allow-methods','access-control-allow-headers','vary'])if(typeof response.headers[key]==='string')out[key]=response.headers[key] as string;
     await route.fulfill({status:response.statusCode,headers:out,body:Buffer.concat(chunks)});

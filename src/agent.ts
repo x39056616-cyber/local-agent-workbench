@@ -62,12 +62,14 @@ export class Agent extends EventEmitter {
       const options=JSON.parse(task.options||'{}');
       const prompt=`任务工作目录：${task.workspace}\n用户任务：${options.currentPrompt||task.prompt}\n${options.conversation?.length?'此前对话（仅作任务上下文）：\n'+JSON.stringify(options.conversation).slice(-18000):''}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n模型由工作台按任务选派；仅在用户需要文件时生成成果。完成时提交可直接展示给用户的最终回答，而不是执行计划。`;
       const capabilityHints=this.tools.skillHints(options.currentPrompt||task.prompt);
+      const savedCrawls=this.tools.crawler.list(ctx).jobs;
+      const crawlHints=savedCrawls.length?'本任务已有采集记录（包括服务中断时保存的队列），不要重新搜索或创建同样的采集。先 crawl_status 查看，再对 interrupted/paused 的原 jobId 调用 crawl_resume；已成功页面直接 crawl_read。不得把状态目录或空的 sources.md 当成已取得的作品。已有采集：'+JSON.stringify(savedCrawls):'';
       const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
       ctx.emit('workflow_start','system',workflow);
       const activate=(c:RunContext)=>{if(this.active)this.active.ctx=c;},runner=new Workflows(this.engines,this.store,activate);
       const direct=!evaluation&&['native','adaptive'].includes(workflow.mode);
       const decision=!evaluation&&!['balanced','team'].includes(workflow.mode)&&!direct?await this.router.select(ctx):undefined;
-      const execution=direct?await adaptiveExecution(prompt+'\n'+capabilityHints,ctx,this.store,this.router,(engine,c,p)=>runner.run(p,c,workflow,engine),activate):undefined;
+      const execution=direct?await adaptiveExecution(prompt+'\n'+capabilityHints+'\n'+crawlHints,ctx,this.store,this.router,(engine,c,p)=>runner.run(p,c,workflow,engine),activate):undefined;
       const result=execution?execution.result:evaluation?.kind==='bfcl'?await this.engines.serialQwen(()=>runBfcl(ctx,evaluation),ctx):await runner.run(prompt+'\n'+capabilityHints,ctx,workflow,decision?.engine);
       controller.signal.throwIfAborted();
       const currentEvents=this.store.events(task.id,startEvent);

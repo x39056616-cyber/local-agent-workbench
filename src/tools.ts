@@ -95,6 +95,9 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0,rawM
     const dispatcher=new ProxyAgent({uri:config.webProxy,requestTls:{servername:u.hostname}});
     try{
       const res=await proxyRequest(target,{dispatcher,method:'GET',signal,headers:{host:u.host,'user-agent':'LocalAgent/0.1',accept:'text/*,application/json'},headersTimeout:25000,bodyTimeout:25000});
+      // destroy() emits UND_ERR_ABORTED asynchronously, including on rejected status/MIME.
+      // Keep an error listener even when no body iterator will be created. Iterated errors still reject normally.
+      res.body.on('error',()=>{});
       if(res.statusCode>=300&&res.statusCode<400&&res.headers.location){res.body.destroy();if(redirects>=3)throw new Error('网页重定向过多');return await publicFetch(new URL(String(res.headers.location),u).href,signal,redirects+1,rawMode,origins,allow);}
       if(res.statusCode>=400){res.body.destroy();throw new Error('网页返回 HTTP '+res.statusCode);}
       if(!/text|json|xml/.test(String(res.headers['content-type']||''))){res.body.destroy();throw new Error('该链接不是可读取的文本网页');}
@@ -105,6 +108,7 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0,rawM
   }
   return new Promise((resolve,reject)=>{
     const req=(u.protocol==='https:'?https:http).get(u,{signal,timeout:25000,headers:{'User-Agent':'LocalAgent/0.1','Accept':'text/*,application/json'},lookup:(_host:any,_opts:any,cb:any)=>{if(_opts?.all)cb(null,[{address,family:4}]);else cb(null,address,4);}},res=>{
+      res.on('error',reject);
       if(res.statusCode && res.statusCode>=300 && res.statusCode<400 && res.headers.location){res.resume();if(redirects>=3)return reject(new Error('网页重定向过多'));publicFetch(new URL(res.headers.location,u).href,signal,redirects+1,rawMode,origins,allow).then(resolve,reject);return;}
       if((res.statusCode||500)>=400){res.resume();reject(new Error('网页返回 HTTP '+res.statusCode));return;}
       const type=String(res.headers['content-type']||'');if(!/text|json|xml/.test(type)){res.resume();reject(new Error('该链接不是可读取的文本网页'));return;}
