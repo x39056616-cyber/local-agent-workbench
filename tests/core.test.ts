@@ -27,5 +27,5 @@ test('审批拒绝会被记录，取消等待不触发执行',async()=>{
 test('完成声明引用不存在的文件时不能通过，预算耗尽会阻止后续调用',async()=>{
   const dir=await mkdtemp(path.join(os.tmpdir(),'local-agent-finish-')),store=new Store(dir),tools=new Tools(store),task=store.create('test','qwen',dir),events:any[]=[];
   const ctx:RunContext={task,signal:new AbortController().signal,emit:(...e)=>events.push(e),tool:async()=>{}};
-  try{await assert.rejects(tools.call(ctx,'finish_task',{outcome:'completed',summary:'完成',files:['不存在.md']},'qwen'));assert(!events.some(e=>e[0]==='completion'));store.setSetting('maxCalls',1);await assert.rejects(tools.call(ctx,'list_files',{},'qwen'),/预算/);}finally{store.close();await rm(dir,{recursive:true,force:true});}
+  try{await assert.rejects(tools.call(ctx,'finish_task',{outcome:'completed',summary:'完成',files:['不存在.md']},'qwen'));assert(!events.some(e=>e[0]==='completion'));store.setSetting('maxCalls',1);await tools.call(ctx,'list_files',{},'qwen');await assert.rejects(tools.call(ctx,'list_files',{},'qwen'),/预算/);}finally{store.close();await rm(dir,{recursive:true,force:true});}
 });

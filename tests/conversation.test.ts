@@ -27,6 +27,15 @@ test('工具任务直接交付 finish_task 的最终答案，后续引擎说明�
  }finally{s.close();await rm(dir,{recursive:true,force:true});}
 });
 
+test('原生执行的blocked结果直接显示缺口，不换模型重做或丢失最终答复',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'la-blocked-')),s=new Store(dir),a=new Agent(s,'');
+ try{const t=s.create('核对现有资料','qwen',dir);s.update(t.id,{options:JSON.stringify({intent:'task',workflow:{mode:'native'}})});
+  a.router.candidates=async()=>[{engine:'qwen',profile:'test',available:true}];a.tools.retrieval.search=async()=>({hits:[],mode:'test',warning:''}) as any;
+  let calls=0;a.engines.run=async(_e,_p,c)=>{calls++;await c.tool('finish_task',{outcome:'blocked',summary:'已保存目录，全文0/20份，尚未完成。',files:[]},'qwen');return '结果已提交';};
+  await a.pump();assert.equal(calls,1);assert.equal(s.get(t.id)?.status,'failed');assert.equal(s.get(t.id)?.result,'已保存目录，全文0/20份，尚未完成。');assert.equal(s.events(t.id).find(e=>e.type==='final')?.data.outcome,'blocked');
+ }finally{s.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('文件预览有界读取、保留中文，拒绝越界和二进制，HTML仅返回文本',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-preview-'));
  try{

@@ -26,7 +26,8 @@ export async function adaptiveExecution(prompt:string,ctx:RunContext,store:Store
    const result=await run(decision.engine,scoped,attemptPrompt);ctx.signal.throwIfAborted();
    const completion=store.events(ctx.task.id,after).findLast(e=>e.type==='completion'&&e.engine===decision.engine);
    if(!completion)throw new Error('执行器未提交可验证的完成结果');
-   if(completion.data.outcome!=='completed')throw new Error(completion.data.summary||'任务未完成');
+   // A valid blocked submission is a real handoff to the user, not an engine crash to replay elsewhere.
+   if(!['completed','blocked'].includes(completion.data.outcome))throw new Error('执行器完成状态无效');
    return {result,decision,durationMs:performance.now()-start};
   }catch(error){
    router.record(ctx,decision,'failed',performance.now()-start,error);tried.push(decision.engine);

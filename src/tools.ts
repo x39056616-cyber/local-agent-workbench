@@ -165,8 +165,8 @@ export class Tools {
       if(typeof value==='number'&&((property.minimum!==undefined&&value<property.minimum)||(property.maximum!==undefined&&value>property.maximum)))throw new Error('参数超出允许范围：'+key);
     }
     const events=this.store.events(ctx.task.id),lastUser=events.findLastIndex(e=>e.type==='user_message'),turnId=JSON.parse(ctx.task.options||'{}').turnId||String(lastUser<0?'initial':events[lastUser].id);
-    const countKey=ctx.task.id+':'+turnId+':'+engine,count=(this.counts.get(countKey)??events.slice(lastUser<0?0:lastUser).filter(e=>e.type==='tool_start'&&e.engine===engine).length)+1;
-    if(count>this.store.setting('maxCalls',30))throw new Error('已达到该执行器工具调用预算');this.counts.set(countKey,count);
+    const countKey=ctx.task.id+':'+turnId+':'+engine,count=(this.counts.get(countKey)??events.slice(lastUser<0?0:lastUser).filter(e=>e.type==='tool_start'&&e.engine===engine&&e.data.name!=='finish_task').length)+(name==='finish_task'?0:1);
+    if(name!=='finish_task'&&count>this.store.setting('maxCalls',30))throw new Error('已达到该执行器工具调用预算。不能继续搜索、采集或写入；仍可 finish_task 提交已有成果，未完成请 outcome=blocked 并明确缺口。');this.counts.set(countKey,count);
     const id=randomUUID();
     this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?,?,?)').run(id,ctx.task.id,name,JSON.stringify(args),'running','',new Date().toISOString());
     ctx.emit('tool_start',engine,{id,name,args});

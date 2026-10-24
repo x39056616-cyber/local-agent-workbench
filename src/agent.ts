@@ -76,7 +76,7 @@ export class Agent extends EventEmitter {
       const rootEngine=evaluation?.kind==='bfcl'?'qwen':workflow.mode==='balanced'?'system':execution?.decision.engine||decision?.engine||taskRoute(task).engine;
       const completion=currentEvents.filter(e=>e.type==='completion'&&e.engine===rootEngine).at(-1);
       if(!completion){this.store.update(task.id,{result});throw new Error('执行器已结束，但未通过 finish_task 提交可验证的完成声明。请检查回答后继续。');}
-      if(completion.data.outcome!=='completed'){this.store.update(task.id,{result});throw new Error(completion.data.summary||'执行器报告任务尚未完成');}
+      if(completion.data.outcome!=='completed'){const summary=completion.data.summary||'执行器报告任务尚未完成';this.store.update(task.id,{result:summary});ctx.emit('final',rootEngine,{text:summary,files:completion.data.files,outcome:'blocked',turnId:options.turnId||task.id});throw new Error(summary);}
       const artifacts=currentEvents.filter(e=>e.type==='artifact');
       const verified:any[]=[];
       for(const e of artifacts){try{const p=await safePath(task.workspace,e.data.path),s=await fs.stat(p);verified.push({path:e.data.path,exists:s.isFile(),bytes:s.size});}catch{verified.push({path:e.data.path,exists:false});}}
