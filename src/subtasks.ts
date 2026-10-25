@@ -7,7 +7,7 @@ import {toolSpecs} from './tools.ts';
 import {EvidenceLedger} from './evidence.ts';
 import {researchKinds} from './routing.ts';
 
-const reads=new Set(['read_file','list_files','search_files','tools_search','skill_read','web_search','web_read','fetch_url','desktop_search','desktop_read','knowledge_search','memory_search','tool_result_read','crawl_status','crawl_read','image_analyze']);
+const reads=new Set(['read_file','list_files','search_files','tools_search','skill_read','web_search','web_read','fetch_url','desktop_search','desktop_read','knowledge_search','memory_search','tool_result_read','crawl_status','crawl_read','document_discover','document_read','document_status','image_analyze']);
 const submit={name:'submit_stage',description:'提交已完成的子任务结论。summary 必须包含事实和具体结果。',parameters:{type:'object',properties:{payload:{type:'string'}},required:['payload'],additionalProperties:false}};
 export async function researchSubtask(ctx:RunContext,goal:string,caller:string,store:Store,engines:Engines,router:ModelRouter,activate:(c:RunContext)=>void){
  ctx.signal.throwIfAborted();

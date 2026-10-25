@@ -20,10 +20,16 @@ import {BrowserTools} from './browser.ts';
 import {selectTools} from './tool-selection.ts';
 import {CrawlService} from './crawler.ts';
 import {imageInput} from './image-input.ts';
+import {DocumentService} from './documents.ts';
 
 const str=(description:string)=>({type:'string',description});
 const spec=(name:string,description:string,properties:any,required:string[]=[])=>({name,description,parameters:{type:'object',properties,required,additionalProperties:false}});
 const specs=[
+  spec('document_discover','读取公开来源页，发现PDF/Word附件链接；候选不计入已下载数量。',{url:str('公开来源网页')},['url']),
+  spec('document_collect','每批1–8个公开PDF/DOC/DOCX链接，下载原文件、隔离提取正文并去重，自动交付原文件及manifest。支持中断后按原URL重试，不会把HTML当文档。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},sourceUrl:str('可选的附件来源网页URL')},['urls']),
+  spec('document_read','分段读取已提取的文档正文。按nextOffset继续，原文件及提取正文均校验hash。',{id:str('document_collect返回的文档ID'),offset:{type:'integer',minimum:0}},['id']),
+  spec('document_status','查看本任务真实文档、材料登记与目标差距。名称/获奖信息/报告全文分别计数。',{}),
+  spec('material_record','每批登记1–20项真实材料。title仅名称，award含奖项证据，fulltext必须关联有效文档并满足报告正文结构。题名、年份、奖项都须来自实际读取正文，不允许模型记忆充数。',{items:{type:'array',minItems:1,maxItems:20,items:{type:'object',properties:{title:str('真实作品或文档题名'),kind:{type:'string',enum:['title','award','fulltext']},sourceUrl:str('本任务实际读取过的来源URL'),quote:str('含真实题名的连续原文摘录，8–1500字'),year:{type:'integer'},yearQuote:str('含年份的原文摘录'),awardQuote:str('含本作品题名及奖项的连续原文摘录'),documentId:str('fulltext必须提供下载文档ID')},required:['title','kind','quote'],additionalProperties:false}}},['items']),
   spec('image_analyze','使用本地 Qwen 的视觉模型实际识别工作区 PNG、JPEG、WebP 图片，返回内容描述或识别文字。不要用 read_file 读取图片二进制；无需云端上传。',{path:str('任务目录内的图片相对路径'),question:str('需要从图片确认的具体内容，默认描述图片并识别可见文字')},['path']),
   spec('crawl_start','批量采集公开网页，由后端 Crawlee 调度，遵守 robots.txt、站点范围与页数预算。返回 jobId；完成前可 crawl_status 等待，之后必须 crawl_read 阅读正文再总结。自动导出 JSON、Markdown、CSV。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},maxPages:{type:'integer',minimum:1,maximum:30},maxDepth:{type:'integer',minimum:0,maximum:3},mode:{type:'string',enum:['http','auto','browser']}},['urls']),
   spec('crawl_status','查询本任务采集进度与来源目录；省略 jobId 列出已有采集，重启后先查再恢复。waitMs 最多 10000，按 nextPagesOffset 翻目录。目录不能替代正文阅读。',{jobId:str('crawl_start 返回的 ID'),waitMs:{type:'integer',minimum:0,maximum:10000},pagesOffset:{type:'integer',minimum:0}}),
@@ -121,16 +127,16 @@ export async function publicFetch(url:string,signal:AbortSignal,redirects=0,rawM
 export class Tools {
   store:Store; skills:any[]=[];
   maintenance:Maintenance;browser=new BrowserTools();
-  crawler:CrawlService;
+  crawler:CrawlService;documents:DocumentService;
   subtask:(ctx:RunContext,goal:string,caller:string)=>Promise<any>=async()=>{throw new Error('子任务服务未就绪');};
   roleTask:(ctx:RunContext,args:any,caller:string)=>Promise<any>=async()=>{throw new Error('角色子任务服务未就绪');};
   vision:(ctx:RunContext,image:any,question:string)=>Promise<string>=async()=>{throw new Error('本地视觉服务未就绪');};
-  specsFor(ctx:RunContext){const images=this.store.events(ctx.task.id).filter(e=>e.type==='attachment'&&/\.(?:png|jpe?g|webp)$/i.test(e.data.path||'')).map(e=>e.data.path);return selectTools(toolSpecs(false),(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt)+'\n'+images.join('\n'));}
+  specsFor(ctx:RunContext){const images=this.store.events(ctx.task.id).filter(e=>e.type==='attachment'&&/\.(?:png|jpe?g|webp)$/i.test(e.data.path||'')).map(e=>e.data.path);return selectTools(toolSpecs(false),(JSON.parse(ctx.task.options||'{}').currentPrompt||ctx.task.prompt)+'\n'+images.join('\n')+(this.documents.goal(ctx)?'\n'+ctx.task.prompt:''));}
   retrieval:Retrieval; desktop:Desktop;
   delegate:(engine:string,prompt:string,ctx:RunContext)=>Promise<string>=async()=>{throw new Error('委派服务未初始化');};
   approval:(ctx:RunContext,action:string,detail:any)=>Promise<boolean>=async()=>false;
   counts=new Map<string,number>();
-  constructor(store:Store){this.store=store;this.crawler=new CrawlService(store);this.retrieval=new Retrieval(store);this.desktop=new Desktop();this.maintenance=new Maintenance();this.maintenance.approve=(ctx,action,detail)=>this.approval(ctx,action,detail);}
+  constructor(store:Store){this.store=store;this.crawler=new CrawlService(store);this.documents=new DocumentService(store);this.retrieval=new Retrieval(store);this.desktop=new Desktop();this.maintenance=new Maintenance();this.maintenance.approve=(ctx,action,detail)=>this.approval(ctx,action,detail);}
   async inventory(){
     const found:any[]=[];
     async function scan(dir:string,depth:number){if(depth>4)return;let entries;try{entries=await fs.readdir(dir,{withFileTypes:true});}catch{return;}
@@ -182,6 +188,11 @@ export class Tools {
     if(requestsWorkbenchChange(userPrompt)&&name==='run_command')throw new Error('修改工作台网页请使用受控维护入口；不通过资料任务命令修改应用。隔离检查由后端维护服务执行。');
     if(name==='run_command'&&/(?:不要|不得|禁止|不能|不允许|无需|不(?:需要|用)?)(?:运行|执行|调用)(?:任何|系统|沙箱)?命令|do not (?:run|execute) (?:any )?commands/i.test(userPrompt))throw new Error('用户明确禁止运行命令，本任务不会发起命令审批或执行。');
     switch(name){
+      case 'document_discover': return this.documents.discover(ctx,a.url);
+      case 'document_collect': return this.documents.collect(ctx,a.urls,a.sourceUrl,engine);
+      case 'document_read': return this.documents.read(ctx,a.id,a.offset);
+      case 'document_status': return this.documents.status(ctx);
+      case 'material_record': return this.documents.record(ctx,a.items,engine);
       case 'image_analyze': {
         if(a.question&&a.question.length>4000)throw new Error('图片问题最多 4000 字符');
         const image=await imageInput(ctx,a.path,safePath),text=await this.vision(ctx,image,a.question||'简要说明图片主体和关键文字，不逐行转写整张图。不确定的细节请明确说明。');
@@ -191,6 +202,7 @@ export class Tools {
         if([...this.crawler.active.values()].some(a=>a.taskId===ctx.task.id))throw new Error('采集仍在运行，请 crawl_status 等待，或 crawl_stop 保存进度后再交付');
         if(!['completed','blocked'].includes(a.outcome)||!Array.isArray(a.files)||a.files.some((f:any)=>typeof f!=='string'))throw new Error('完成声明格式错误');
         if(a.outcome==='completed'){
+          await this.documents.assertComplete(ctx,a.files);
           const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message');
           const review=events.slice(Math.max(0,last)).findLast(e=>e.type==='agent_task_done'&&e.data.result.role==='reviewer');
           if(review&&!review.data.result.passed)throw new Error('最近的独立验收未通过，请修订后重新验收，或明确报告 blocked：'+review.data.result.issues.join('；'));

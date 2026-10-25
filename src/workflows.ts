@@ -33,7 +33,7 @@ export function validatePlan(value:any,roles:Role[],maxSteps:number){
   for(const s of value.steps){if(!s||typeof s.id!=='string'||!/^\w{1,32}$/.test(s.id)||seen.has(s.id)||typeof s.goal!=='string'||!s.goal.trim()||s.goal.length>3000||!roles.some(r=>r.id===s.role)||!Array.isArray(s.dependsOn)||s.dependsOn.some((d:any)=>typeof d!=='string'||!seen.has(d)))throw new Error('计划含无效角色、重复 ID、循环或尚未定义的依赖');seen.add(s.id);}
   return value.steps as {id:string;goal:string;role:string;dependsOn:string[]}[];
 }
-const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','workbench_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','image_analyze']);
+const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','workbench_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','document_discover','document_read','document_status','image_analyze']);
 export const stageSpec={name:'submit_stage',description:'提交当前阶段的结构化结果。payload 是阶段指定格式的 JSON 字符串；提交后立即结束。',parameters:{type:'object',properties:{payload:{type:'string'}},required:['payload'],additionalProperties:false}};
 
 // 阶段串行，因此本机 Qwen 始终只有一个推理请求。结构化结果决定状态迁移。
@@ -54,7 +54,7 @@ export class Workflows {
       const key=createHash('sha256').update(JSON.stringify(['evidence-v1',taskKey,w,id,engine,instruction,expected])).digest('hex');
       const old=this.store.events(ctx.task.id).find(e=>e.type==='stage_done'&&e.data.key===key);
       if(old){ctx.emit('stage_reused',engine,{id,key});return old.data.value;}
-      let submitted=false,value:any,reads=0;const ledger=new EvidenceLedger(ctx.task.workspace),readPaths=new Set<string>(),workbenchPaths=new Set<string>();
+      let submitted=false,value:any,reads=0;const ledger=new EvidenceLedger(ctx.task.workspace),readPaths=new Set<string>(),workbenchPaths=new Set<string>(),documentCoverage=new Map<string,[number,number][]>();
       const scoped:RunContext={...ctx,stage:{id,readOnly:true},specs:[stageSpec,...(allowRead?toolSpecs(false).filter(s=>readOnly.has(s.name)):[])],
         emit:(type,e,data)=>ctx.emit(type,e,{...data,stageId:id}),
         tool:async(name,args,e)=>{
@@ -71,7 +71,7 @@ export class Workflows {
             ctx.emit('stage_submission',e,{id});scoped.stage?.onSubmitted?.();return {accepted:true};
            }catch(error){ctx.emit('stage_rejected',engine,{id,error:error instanceof Error?error.message:'阶段提交无效'});throw error;}
           }
-          if(allowRead&&readOnly.has(name)){const r=await ctx.tool(name,args,e);ledger.record(name,args,r);if(name==='workbench_read'&&r?.path&&typeof r?.text==='string')workbenchPaths.add(r.path);if(name==='read_file'&&(r?.total===0||typeof r?.text==='string'&&r.text.length)){reads++;if(r?.path)readPaths.add(path.resolve(ctx.task.workspace,r.path));}return r;}
+          if(allowRead&&readOnly.has(name)){const r=await ctx.tool(name,args,e);ledger.record(name,args,r);if(name==='document_read'&&r?.path&&r.complete){const ranges=documentCoverage.get(r.path)||[];ranges.push([args.offset||0,(args.offset||0)+(r.text?.length||0)]);documentCoverage.set(r.path,ranges);let end=0;for(const [from,to] of ranges.sort((a,b)=>a[0]-b[0])){if(from>end)break;end=Math.max(end,to);}if(end>=r.total){reads++;readPaths.add(await safePath(ctx.task.workspace,r.path));if(r.textPath)readPaths.add(await safePath(ctx.task.workspace,r.textPath));}}if(name==='workbench_read'&&r?.path&&typeof r?.text==='string')workbenchPaths.add(r.path);if(name==='read_file'&&(r?.total===0||typeof r?.text==='string'&&r.text.length)){reads++;if(r?.path)readPaths.add(path.resolve(ctx.task.workspace,r.path));}return r;}
           throw new Error('当前阶段禁止此工具；请通过 submit_stage 提交结构化决定');
         }};
       this.activate(scoped);ctx.emit('stage_start',engine,{id,key,instruction});
@@ -83,7 +83,7 @@ export class Workflows {
           const lastExecutor=turnEvents().filter(e=>e.type==='subagent_done').at(-1)?.engine;
           const fallback=(id==='balanced.plan'?['harness','codex','qwen']:['qwen','harness','codex']).find(e=>e!==engine&&(!id.includes('review')||e!==lastExecutor));
           if(submitted||!fallback||!supervisor.handoff(id,engine,fallback,error,[],true))throw error;
-          if(requireRead===true||Array.isArray(requireRead)&&requireRead.length){reads=0;readPaths.clear();workbenchPaths.clear();}
+          if(requireRead===true||Array.isArray(requireRead)&&requireRead.length){reads=0;readPaths.clear();workbenchPaths.clear();documentCoverage.clear();}
           actualEngine=fallback;ctx.emit('research_fallback','system',{id,from:engine,to:actualEngine,reason:error instanceof Error?error.message:'研究失败',note:'仅移交受控只读阶段；显式选择的引擎不会自动切换'});
           await this.engines.run(actualEngine,stagePrompt+'\n上一执行器未能完成此阶段。先诊断已有工具错误，利用只读工具和已有来源接续，满足原验收条件后提交，不能虚构结果。',scoped,true);
         }
@@ -144,7 +144,7 @@ export class Workflows {
         const continuation=turnEvents().find(e=>e.type==='subagent_start'&&e.data.id==='balanced.execute.'+(revision+1));
         const historical=continuation&&turnEvents().find(e=>e.type==='stage_done'&&e.data.id==='balanced.review.'+revision&&createHash('sha256').update(JSON.stringify([taskKey,w,plan,'balanced.execute.'+(revision+1),e.data.value])).digest('hex')===continuation.data.key);
         if(historical){output=historical.data.value;ctx.emit('stage_reused',reviewer.engine,{id:'balanced.review.'+revision,key:historical.data.key,reason:'恢复已执行修订的原始审查输入，不把旧审查作为当前文件通过证明'});}
-        else output=await stage('balanced.review.'+revision,reviewer.engine,`你是独立审查员，职责：${reviewer.instructions}。规划 ${JSON.stringify(plan)}；执行成果 ${JSON.stringify(completion)}。必须通过 read_file 实际读取全部声明成果，按目标检查。不要重做执行者的工作，不得写入。提交 {"passed":true或false,"summary":"检查结论","issues":["问题和证据"],"files":["最终成果路径"]}。`+(maintenanceRequest?'这是工作台维护任务，还必须用 workbench_read 读取实际应用后的相关源码，不只检查提议报告。':''),v=>{if(typeof v?.passed!=='boolean'||typeof v.summary!=='string'||!Array.isArray(v.issues)||v.issues.some((s:any)=>typeof s!=='string')||!Array.isArray(v.files)||v.files.some((f:any)=>typeof f!=='string')||v.passed&&v.issues.length)throw new Error('独立审查格式无效');return v;},true,completion.files);
+        else output=await stage('balanced.review.'+revision,reviewer.engine,`你是独立审查员，职责：${reviewer.instructions}。规划 ${JSON.stringify(plan)}；执行成果 ${JSON.stringify(completion)}。必须实际读取全部声明成果。文本用read_file，PDF/Word先document_status查ID，再document_read按nextOffset读完全文；完整读取后可同时核对原文件与提取txt。按目标检查。不要重做执行者的工作，不得写入。提交 {"passed":true或false,"summary":"检查结论","issues":["问题和证据"],"files":["最终成果路径"]}。`+(maintenanceRequest?'这是工作台维护任务，还必须用 workbench_read 读取实际应用后的相关源码，不只检查提议报告。':''),v=>{if(typeof v?.passed!=='boolean'||typeof v.summary!=='string'||!Array.isArray(v.issues)||v.issues.some((s:any)=>typeof s!=='string')||!Array.isArray(v.files)||v.files.some((f:any)=>typeof f!=='string')||v.passed&&v.issues.length)throw new Error('独立审查格式无效');return v;},true,completion.files);
         const reviewProducer=turnEvents().filter(e=>e.type==='stage_done'&&e.data.id==='balanced.review.'+revision).at(-1)?.engine||reviewer.engine;
         const reviewFile=await saveReport('review-'+revision+'.json',reviewProducer,output);
         if(output.passed){ctx.emit('plan','system',{steps:plan.steps.map((title:string)=>({title,status:'completed'}))});const files=[...new Set<string>([...completion.files,...output.files,planFile,reviewFile])];await ctx.tool('finish_task',{outcome:'completed',summary:completion.summary+'\n\n独立核验：'+output.summary,files},'system');ctx.emit('workflow_done','system',{mode:w.mode,stages,participants:[...new Set(turnEvents().filter(e=>['stage_done','subagent_done'].includes(e.type)).map(e=>e.engine))]});return completion.summary+'\n\n独立核验：'+output.summary;}

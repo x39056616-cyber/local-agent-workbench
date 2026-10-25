@@ -54,6 +54,7 @@ export class Agent extends EventEmitter {
     const startEvent=this.store.events(task.id).at(-1)?.id||0;
     try{
       await fs.mkdir(task.workspace,{recursive:true});
+      await this.tools.documents.status(ctx);
       const history=this.store.events(task.id).filter(e=>['engine_done','checkpoint','tool_done'].includes(e.type)).slice(-10).map(e=>({type:e.type,engine:e.engine,data:e.data}));
       const evaluation=JSON.parse(task.options||'{}').evaluation;
       const retrieved=evaluation?{hits:[],mode:'evaluation-isolated',warning:''}:await this.tools.retrieval.search(JSON.parse(task.options||'{}').currentPrompt||task.prompt,'all',task.id,controller.signal);
@@ -61,7 +62,7 @@ export class Agent extends EventEmitter {
       ctx.emit('retrieval','system',{mode:retrieved.mode,hits:retrieved.hits.length,warning:retrieved.warning});
       const options=JSON.parse(task.options||'{}');
       const prompt=`任务工作目录：${task.workspace}\n用户任务：${options.currentPrompt||task.prompt}\n${options.conversation?.length?'此前对话（仅作任务上下文）：\n'+JSON.stringify(options.conversation).slice(-18000):''}\n${memory?'用户明确保存的长期记忆：\n'+memory:''}\n${history.length?'这是继续执行。下面是历史检查点（不要重复已有副作用操作，先读取现有成果）：\n'+JSON.stringify(history).slice(-16000):''}\n模型由工作台按任务选派；仅在用户需要文件时生成成果。完成时提交可直接展示给用户的最终回答，而不是执行计划。`;
-      const capabilityHints=this.tools.skillHints(options.currentPrompt||task.prompt);
+      const capabilityHints=this.tools.skillHints(options.currentPrompt||task.prompt)+(this.tools.documents.goal(ctx)?'\n后端材料验收目标：'+JSON.stringify(this.tools.documents.goal(ctx))+'。先document_status核对已有材料，继续时保留原目标与已下载文件；没有达到目标则明确blocked。':'');
       const savedCrawls=this.tools.crawler.list(ctx).jobs;
       const crawlHints=savedCrawls.length?'本任务已有采集记录（包括服务中断时保存的队列），不要重新搜索或创建同样的采集。先 crawl_status 查看，再对 interrupted/paused 的原 jobId 调用 crawl_resume；已成功页面直接 crawl_read。不得把状态目录或空的 sources.md 当成已取得的作品。已有采集：'+JSON.stringify(savedCrawls):'';
       const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
@@ -77,6 +78,9 @@ export class Agent extends EventEmitter {
       const completion=currentEvents.filter(e=>e.type==='completion'&&e.engine===rootEngine).at(-1);
       if(!completion){this.store.update(task.id,{result});throw new Error('执行器已结束，但未通过 finish_task 提交可验证的完成声明。请检查回答后继续。');}
       if(completion.data.outcome!=='completed'){const summary=completion.data.summary||'执行器报告任务尚未完成';this.store.update(task.id,{result:summary});ctx.emit('final',rootEngine,{text:summary,files:completion.data.files,outcome:'blocked',turnId:options.turnId||task.id});throw new Error(summary);}
+      // Reused legacy completion records must satisfy today's goal as well as fresh tool submissions.
+      try{await this.tools.documents.assertComplete(ctx,(completion.data.files||[]).map((f:any)=>typeof f==='string'?f:f.path));}
+      catch(error){const text=errorText(error);this.store.update(task.id,{result:text});ctx.emit('final','system',{text,outcome:'blocked',turnId:options.turnId||task.id});throw error;}
       const artifacts=currentEvents.filter(e=>e.type==='artifact');
       const verified:any[]=[];
       for(const e of artifacts){try{const p=await safePath(task.workspace,e.data.path),s=await fs.stat(p);verified.push({path:e.data.path,exists:s.isFile(),bytes:s.size});}catch{verified.push({path:e.data.path,exists:false});}}

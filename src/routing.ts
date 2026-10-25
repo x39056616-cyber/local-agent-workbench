@@ -2,6 +2,7 @@
 import {requestsWorkbenchChange} from './maintenance-intent.ts';
 import {initialModel} from './model-policy.ts';
 import {requestsCrawl} from './crawl-intent.ts';
+import {inferCollectionGoal} from './collection-goal.ts';
 export function isGreeting(prompt:string){
  const p=prompt.replace(/[\s\p{P}\p{S}]/gu,'').replace(/请问|请|以及|还有|并且/gu,'');
  return /^(?:(?:你好|您好|嗨|哈喽|hello|hi|hey|你是谁|你叫什么名字|你叫什么|介绍一下你自己|介绍下你自己|自我介绍|你能做什么|你可以做什么|谢谢你|谢谢|早上好|晚上好|在吗))+$/i.test(p);
@@ -14,7 +15,7 @@ export function researchKinds(prompt:string):('web'|'local')[]{
  const urls=/https?:\/\//i.test(text),local=/(?:读取|查找|查阅|查询|检索|搜索|分析|总结|根据|从)[^。！？；;，,\n]{0,100}(?:本地|知识库|资料库|附件|文件|目录|仓库)|(?:知识库|资料库|附件)[^。！？；;，,\n]{0,40}(?:查|搜|检索|总结)|附件文件：/.test(text);
  if(explain&&!urls&&!requestsCrawl(text))return [];
  const platformLookup=/(?:github|bilibili|youtube|reddit|twitter|小红书|微博|B站|知乎)/i.test(text)&&/(?:找|搜|查|热门|热榜|趋势|最新|本月|这一个月|近[一\d]+[天月周])/i.test(text);
- const web=urls||platformLookup||requestsCrawl(text)||!local&&/(?:联网|上网|调研|搜集资料|查资料|查找资料|搜索|搜一下|查一下|找[\s\S]{0,40}(?:资料|来源|文献|论文)|查[\s\S]{0,40}(?:最新|资料|来源|文献|论文)|今天的(?:天气|新闻|行情)|实时(?:数据|天气|价格))/.test(text);
+ const web=urls||platformLookup||requestsCrawl(text)||!local&&(!!inferCollectionGoal(text)||/(?:联网|上网|调研|搜集资料|查资料|查找资料|搜索|搜一下|查一下|找[\s\S]{0,40}(?:资料|来源|文献|论文)|查[\s\S]{0,40}(?:最新|资料|来源|文献|论文)|今天的(?:天气|新闻|行情)|实时(?:数据|天气|价格))/.test(text));
  return [...(web?['web' as const]:[]),...(local?['local' as const]:[])];
 }
 export function requiresFileDelivery(prompt:string){

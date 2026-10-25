@@ -6,7 +6,7 @@ import type {Store} from './store.ts';
 import {safePath} from './tools.ts';
 import {ModelRequestError} from './model-request.ts';
 
-const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','tool_result_read','image_analyze']);
+const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','document_discover','document_read','document_status','tool_result_read','image_analyze']);
 export const recoveryTools=new Set([...readOnly,'write_file','plan_update','finish_task']);
 const names:Record<string,string>={qwen:'Qwen',harness:'DeepSeek',codex:'Codex'};
 

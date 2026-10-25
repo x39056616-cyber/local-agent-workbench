@@ -36,6 +36,13 @@ test('原生执行的blocked结果直接显示缺口，不换模型重做或丢�
  }finally{s.close();await rm(dir,{recursive:true,force:true});}
 });
 
+test('旧完成声明或执行器直接声称拿到20份，仍必须经过最终材料目标核对',async()=>{
+ const dir=await mkdtemp(path.join(os.tmpdir(),'la-goal-final-')),s=new Store(dir),a=new Agent(s,'');
+ try{const t=s.create('收集20份获奖作品','qwen',dir);s.update(t.id,{options:JSON.stringify({intent:'task',workflow:{mode:'native'}})});a.router.candidates=async()=>[{engine:'qwen',profile:'test',available:true}];a.tools.retrieval.search=async()=>({hits:[],mode:'test',warning:''}) as any;
+  a.engines.run=async(_e,_p,c)=>{c.emit('completion','qwen',{outcome:'completed',summary:'已取得20份全文',files:[]});return '已完成';};await a.pump();assert.equal(s.get(t.id)?.status,'failed');assert.match(s.get(t.id)?.result||'',/0\/20/);const final=s.events(t.id).findLast(e=>e.type==='final');assert.equal(final?.data.outcome,'blocked');assert(!final?.data.text.includes('已取得20份全文'));
+ }finally{s.close();await rm(dir,{recursive:true,force:true});}
+});
+
 test('文件预览有界读取、保留中文，拒绝越界和二进制，HTML仅返回文本',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-preview-'));
  try{
