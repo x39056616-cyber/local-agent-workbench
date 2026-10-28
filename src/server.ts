@@ -16,6 +16,8 @@ import {previewArtifact} from './artifacts.ts';
 import {maintenanceScope} from './maintenance-intent.ts';
 import {preference} from './model-policy.ts';
 import {deliveryRecovery} from './delivery-recovery.ts';
+import {describeArtifact} from './artifact-labels.ts';
+import {displayTaskTitle} from './task-name.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -36,7 +38,7 @@ const server=http.createServer(async(req,res)=>{
   const remote=!!origin&&origin!=='http://'+host;
   const trustedRemote=remote&&pairedOrigin===origin&&!!pairedToken;
   if(remote&&!trustedRemote)return json(res,403,{error:'此网页尚未与本机配对，请从本机工作台开启 GitHub 网页连接。'});
-  if(trustedRemote){res.setHeader('Access-Control-Allow-Origin',origin!);res.setHeader('Vary','Origin');res.setHeader('Access-Control-Allow-Methods','GET, POST, DELETE, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type, Last-Event-ID');res.setHeader('Access-Control-Allow-Private-Network','true');if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}}
+  if(trustedRemote){res.setHeader('Access-Control-Expose-Headers','Content-Disposition');res.setHeader('Access-Control-Allow-Origin',origin!);res.setHeader('Vary','Origin');res.setHeader('Access-Control-Allow-Methods','GET, POST, DELETE, OPTIONS');res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type, Last-Event-ID');res.setHeader('Access-Control-Allow-Private-Network','true');if(req.method==='OPTIONS'){res.writeHead(204);res.end();return;}}
   if(req.headers['sec-fetch-site']==='cross-site'&&!trustedRemote)return json(res,403,{error:'拒绝跨站请求'});
   let url:URL;try{url=new URL(req.url||'/','http://'+host);}catch{return json(res,400,{error:'URL 无效'});}
   try{
@@ -84,7 +86,7 @@ const server=http.createServer(async(req,res)=>{
         const desktop=agent.tools.desktop.snapshot;
         return json(res,200,{engines,tools:toolSpecs(true),skills:agent.tools.skills,retrieval:agent.tools.retrieval.status(),connectors:{checkedAt:desktop.checkedAt,apps:desktop.apps,error:desktop.error,detail:desktop.checkedAt?'已通过 Codex App Server 验证运行时状态；媒体及宿主交互工具仍需桌面查看。':'点击检测连接器，核对当前登录下可用的桌面能力。'}});
       }
-      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list().filter(t=>Boolean(t.archived)===(url.searchParams.get('archived')==='1')).map(({id,title,status,engine,created,updated,archived})=>({id,title,status,engine,created,updated,archived})));
+      if(url.pathname==='/api/tasks'&&req.method==='GET')return json(res,200,store.list().filter(t=>Boolean(t.archived)===(url.searchParams.get('archived')==='1')).map(t=>({id:t.id,title:displayTaskTitle(t),status:t.status,engine:t.engine,created:t.created,updated:t.updated,archived:t.archived})));
       if(url.pathname==='/api/tasks'&&req.method==='POST'){
         const data=await body(req);if(typeof data.prompt!=='string'||!data.prompt.trim()||data.prompt.length>30000)throw new Error('请输入 1–30000 字符的任务');
         if(!['auto','codex','harness','qwen'].includes(data.engine))throw new Error('执行器无效');
@@ -112,7 +114,7 @@ const server=http.createServer(async(req,res)=>{
       }
       const match=url.pathname.match(/^\/api\/tasks\/([a-f0-9-]+)(?:\/(.*))?$/);
       if(match){const task=store.get(match[1]);if(!task)return json(res,404,{error:'任务不存在'});const action=match[2];
-        if(!action&&req.method==='GET')return json(res,200,{task,events:store.events(task.id),approvals:store.db.prepare("SELECT * FROM approvals WHERE taskId=? AND status='pending'").all(task.id)});
+        if(!action&&req.method==='GET')return json(res,200,{task:{...task,title:displayTaskTitle(task)},events:store.events(task.id),approvals:store.db.prepare("SELECT * FROM approvals WHERE taskId=? AND status='pending'").all(task.id)});
         if(action==='events'&&req.method==='GET'){
           let last=Number(req.headers['last-event-id']||url.searchParams.get('after')||0);if(!Number.isSafeInteger(last)||last<0)last=0;
           res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache','Connection':'keep-alive'});
@@ -122,8 +124,9 @@ const server=http.createServer(async(req,res)=>{
           const timer=setInterval(()=>res.write(': keepalive\n\n'),15000);
           req.on('close',()=>{clearInterval(timer);agent.removeListener('event',send);remoteStreams.delete(res);});return;
         }
+        if(action==='title'&&req.method==='POST'){const d=await body(req);if(typeof d.title!=='string'||!d.title.trim()||d.title.trim().length>100)throw new Error('任务名称应为1–100字符');const title=d.title.replace(/\s+/g,' ').trim();store.update(task.id,{title});agent.emitEvent(task.id,'task_renamed','user',{title});return json(res,200,{...store.get(task.id),title});}
         if(action==='routing-feedback'&&req.method==='POST'){const d=await body(req),feedback=agent.router.feedback(task.id,d.decisionId,d.rating);agent.emitEvent(task.id,'routing_feedback','user',feedback);return json(res,200,feedback);}
-        if(action==='archive'&&req.method==='POST'){const d=await body(req);if(typeof d.archived!=='boolean')throw new Error('归档参数无效');store.archive(task.id,d.archived);agent.emitEvent(task.id,'archived','user',{archived:d.archived});return json(res,200,store.get(task.id));}
+        if(action==='archive'&&req.method==='POST'){const d=await body(req);if(typeof d.archived!=='boolean')throw new Error('归档参数无效');store.archive(task.id,d.archived);agent.emitEvent(task.id,'archived','user',{archived:d.archived});return json(res,200,{...store.get(task.id),title:displayTaskTitle(store.get(task.id)!)});}
         if(action==='cancel'&&req.method==='POST'){agent.cancel(task.id);return json(res,200,{ok:true});}
         if(action==='resume'&&req.method==='POST'){
           if(['queued','running','waiting','cancelling'].includes(task.status))return json(res,409,{error:'任务正在执行'});
@@ -155,15 +158,15 @@ const server=http.createServer(async(req,res)=>{
             store.update(task.id,{status:'queued',error:'',result:'',options:JSON.stringify(prior)});
           }
           agent.emitEvent(task.id,'checkpoint','user',{message:'用户继续任务。先核对已有成果与操作记录。'});
-          await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true,task:store.get(task.id)});
+          await agent.enqueue(store.get(task.id)!);return json(res,200,{ok:true,task:{...store.get(task.id),title:displayTaskTitle(store.get(task.id)!)}});
         }
         if(action==='files'&&req.method==='GET'){
-          const files:any[]=[];const walk=async(dir:string,depth:number)=>{if(depth>3||files.length>=200)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()||['node_modules','.git','.agent-recovery'].includes(e.name))continue;const p=await safePath(task.workspace,path.join(dir,e.name));if(e.isDirectory())await walk(p,depth+1);else {const s=await fs.stat(p);files.push({path:path.relative(task.workspace,p),bytes:s.size});}}};await walk(task.workspace,0);return json(res,200,files);
+          const files:any[]=[];const walk=async(dir:string,depth:number)=>{if(depth>3||files.length>=200)return;for(const e of await fs.readdir(dir,{withFileTypes:true})){if(e.isSymbolicLink()||['node_modules','.git','.agent-recovery'].includes(e.name))continue;const p=await safePath(task.workspace,path.join(dir,e.name));if(e.isDirectory())await walk(p,depth+1);else {const s=await fs.stat(p);const relative=path.relative(task.workspace,p),doc=store.db.prepare('SELECT * FROM documents WHERE taskId=? AND (path=? OR textPath=?) LIMIT 1').get(task.id,relative.replaceAll('\\','/'),relative.replaceAll('\\','/'));files.push({path:relative,bytes:s.size,...await describeArtifact(task.workspace,relative,doc)});}}};await walk(task.workspace,0);return json(res,200,files);
         }
         if(action==='preview'&&req.method==='GET')return json(res,200,await previewArtifact(task.workspace,url.searchParams.get('path')||''));
         if(action==='file'&&req.method==='GET'){
           const name=url.searchParams.get('path')||'',p=await safePath(task.workspace,name),stat=await fs.stat(p);if(!stat.isFile()||stat.size>20_000_000)throw new Error('成果无效或超过 20 MB');
-          const bytes=await fs.readFile(p);res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent(path.basename(p))}`);res.end(bytes);return;
+          const bytes=await fs.readFile(p);res.setHeader('Content-Type','application/octet-stream');res.setHeader('Content-Disposition',`attachment; filename*=UTF-8''${encodeURIComponent((await describeArtifact(task.workspace,name,store.db.prepare('SELECT * FROM documents WHERE taskId=? AND (path=? OR textPath=?) LIMIT 1').get(task.id,name.replaceAll('\\','/'),name.replaceAll('\\','/')))).downloadName)}`);res.end(bytes);return;
         }
       }
       if(url.pathname.startsWith('/api/approvals/')&&req.method==='POST'){const data=await body(req);if(typeof data.approved!=='boolean')throw new Error('审批格式错误');agent.resolveApproval(url.pathname.split('/').at(-1)!,data.approved);return json(res,200,{ok:true});}

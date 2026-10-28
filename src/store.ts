@@ -1,3 +1,4 @@
+import {taskTitle} from './task-name.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -28,13 +29,13 @@ export class Store {
   }
   create(prompt: string, engine: Engine, workspace: string): Task {
     const id = randomUUID(), now = new Date().toISOString();
-    this.db.prepare('INSERT INTO tasks(id,title,prompt,engine,workspace,status,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(id,prompt.slice(0,48),prompt,engine,workspace,'queued',now,now);
+    this.db.prepare('INSERT INTO tasks(id,title,prompt,engine,workspace,status,created,updated) VALUES(?,?,?,?,?,?,?,?)').run(id,taskTitle(prompt),prompt,engine,workspace,'queued',now,now);
     return this.get(id)!;
   }
   get(id: string): Task | undefined { return this.db.prepare('SELECT * FROM tasks WHERE id=?').get(id) as unknown as Task | undefined; }
   list(): Task[] { return this.db.prepare('SELECT * FROM tasks ORDER BY created DESC LIMIT 200').all() as unknown as Task[]; }
   update(id: string, patch: Partial<Task>) {
-    const allowed = ['prompt','status','result','error','session','options','archived','engine'];
+    const allowed = ['title','prompt','status','result','error','session','options','archived','engine'];
     const keys = Object.keys(patch).filter(k => allowed.includes(k));
     if (!keys.length) return;
     this.db.prepare(`UPDATE tasks SET ${keys.map(k => k+'=?').join(',')},updated=? WHERE id=?`).run(...keys.map(k => String(patch[k as keyof Task] ?? '')),new Date().toISOString(),id);
