@@ -10,6 +10,7 @@ import {validateWorkflow} from '../src/workflows.ts';
 import {Store} from '../src/store.ts';
 import {Agent} from '../src/agent.ts';
 import {pdf} from './document-fixture.ts';
+import {deliveryRecovery} from '../src/delivery-recovery.ts';
 
 const prompt='Download https://example.com/report.pdf . Extract the annual report revenue, compare fields, verify against the source, and create comparison.csv and brief.md. Retain the PDF. Do not run commands.';
 const candidates:any[]=['qwen','harness','codex'].map(engine=>({engine,available:true,profile:'test',observations:[]}));
@@ -74,10 +75,26 @@ test('正文定位返回真实片段和物理页码，空搜索不冒充全文�
 
 test('获取阶段最多八次真实工具后自动交接，不等待模型继续包办，阶段记录不冒充质量好评',async()=>fixture(async(a,s,t)=>{
  const calls:string[]=[];let id='';const execute=a.tools.execute.bind(a.tools);a.tools.execute=async(c,name,args,e)=>{if(name==='web_read')throw new Error('网络请求失败');return execute(c,name,args,e);};a.engines.run=async(e,_p,c)=>{calls.push(e);
-  if(c.stage?.id==='balanced.plan'){const r=await c.tool('document_collect',{urls:['https://example.com/report.pdf']},e);id=r.items[0].id;for(let i=0;i<7;i++)try{await c.tool('web_read',{url:'https://example.com/fallback'},e);}catch{ /* 失败同样占用获取阶段预算 */ }assert(c.stage.isSubmitted?.());await assert.rejects(c.tool('document_status',{},e),/已提交/);}
+  if(c.stage?.id==='balanced.plan'){const r=await c.tool('document_collect',{urls:['https://example.com/report.pdf']},e);id=r.items[0].id;for(let i=0;i<7;i++)try{await c.tool('web_read',{url:'https://example.com/fallback/'+i},e);}catch{ /* 失败同样占用获取阶段预算 */ }assert(c.stage.isSubmitted?.());await assert.rejects(c.tool('document_status',{},e),/已提交/);}
   else if(c.stage?.id==='balanced.extract'){await c.tool('document_search',{id,query:'Revenue'},e);await c.tool('submit_stage',{payload:JSON.stringify({summary:'已定位收入',findings:[],issues:[]})},e);}
   else await c.tool('finish_task',{outcome:'blocked',summary:'保留文档，等待补充字段要求。',files:[]},e);return '';
  };
  await a.pump();assert.deepEqual(calls,['harness','qwen','harness']);assert.equal(s.events(t.id).filter(e=>e.type==='tool_start'&&e.engine==='harness').length,8);assert(s.events(t.id).some(e=>e.type==='stage_submission'&&e.data.automatic));assert.equal(s.events(t.id).filter(e=>e.type==='tool_error').length,7);
  const samples=s.db.prepare('SELECT category,rating FROM routing_samples').all();assert.equal(samples.length,2);assert(samples.every((r:any)=>r.rating===null));
+}));
+
+test('预算blocked从已核验来源恢复，导出额度跨修订共享，不重跑获取和提取',async()=>fixture(async(a,s,t)=>{
+ let blocked=false,id='',writer=0;const calls:string[]=[];
+ a.engines.run=async(e,_p,c)=>{calls.push(e+':'+(c.stage?.id||'writer'));
+  if(c.stage?.id==='balanced.plan'){const r=await c.tool('document_collect',{urls:['https://example.com/report.pdf']},e);id=r.items[0].id;await c.tool('submit_stage',{payload:JSON.stringify({summary:'已保存原件',steps:['提取并制作CSV']})},e);}
+  else if(c.stage?.id==='balanced.extract'){await c.tool('document_read',{id},e);for(let i=0;i<29;i++)await a.tools.call({...c,emit:(ty:string,actor:string,d:any)=>s.event(t.id,ty,actor,d)},'document_status',{},'harness');await c.tool('submit_stage',{payload:JSON.stringify({summary:'收入12345',findings:[],issues:[]})},e);}
+  else if(c.stage?.id?.startsWith('balanced.review')){await c.tool('read_file',{path:'comparison.csv'},e);await c.tool('document_search',{id,query:'Revenue'},e);await c.tool('submit_stage',{payload:JSON.stringify(c.stage.id.endsWith('.0')?{passed:false,summary:'需要补单位',issues:['补充USD millions'],files:['comparison.csv']}:{passed:true,summary:'已核对收入与单位',issues:[],files:['comparison.csv']})},e);}
+  else if(!blocked){await assert.rejects(c.tool('write_file',{path:'comparison.csv',content:'must not write'},e),/预算/);blocked=true;await c.tool('finish_task',{outcome:'blocked',summary:'工具预算耗尽，尚未导出',files:[]},e);}
+  else{writer++;assert(c.budget);await assert.rejects(c.tool('web_search',{query:'not allowed'},e),/成果恢复额度/);if(writer>1)await c.tool('read_file',{path:'comparison.csv'},e);await c.tool('write_file',{path:'comparison.csv',content:'year,revenue'+(writer>1?',unit':'')+'\n2025,12345'+(writer>1?',USD millions':'')+'\n'},e);await c.tool('read_file',{path:'comparison.csv'},e);await c.tool('finish_task',{outcome:'completed',summary:'已保存比较表',files:['comparison.csv']},e);}
+  return '';
+ };
+ await a.pump();assert.equal(s.get(t.id)?.status,'failed');
+ const task=s.get(t.id)!;
+ const recovery=deliveryRecovery(task,s.events(t.id));assert(recovery);s.update(t.id,{status:'queued',options:JSON.stringify({...JSON.parse(task.options||'{}'),deliveryRecovery:recovery})});
+ await a.pump();assert.equal(s.get(t.id)?.status,'succeeded',s.get(t.id)?.error);assert.equal(writer,2);assert((await readFile(path.join(t.workspace,'comparison.csv'),'utf8')).includes('USD millions'));assert.equal(calls.filter(c=>c.includes('balanced.plan')).length,1);assert.equal(calls.filter(c=>c.includes('balanced.extract')).length,1);
 }));

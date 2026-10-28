@@ -27,6 +27,13 @@ test('目标从原话固定数量、全文及年份，不把目录或爬虫脚�
 test('隔离解析实际DOCX与PDF，空白扫描页不能声明完整提取',async()=>{
  const dir=await mkdtemp(path.join(os.tmpdir(),'la-parse-'));try{const p=path.join(dir,'test.docx');await writeFile(p,docx(report));const word=await parseDocument(p,'docx',AbortSignal.timeout(10000));assert(word.text.includes('测试研究报告'));const f=path.join(dir,'test.pdf');await writeFile(f,pdf('Research report\nAbstract\nIntroduction\nMethods\nConclusion'));const data=await parseDocument(f,'pdf',AbortSignal.timeout(10000));assert(data.text.includes('Research report'));assert.equal(data.pages,1);assert.deepEqual(data.emptyPages,[]);await writeFile(f,pdf(''));const empty=await parseDocument(f,'pdf',AbortSignal.timeout(10000));assert.deepEqual(empty.emptyPages,[1]);assert.equal(documentKind(Buffer.from('<html>not pdf</html>')),'');}finally{await rm(dir,{recursive:true,force:true});}
 });
+
+test('受限导出重复提交已有URL只校验并复用原件，不会因新URL或原件变化而联网',async()=>fixture(async(t,c)=>{
+ const r=await t.call(c,'document_collect',{urls:['https://example.com/one.docx']},'harness'),id=r.items[0].id;let network=0;t.documents.download=async()=>{network++;throw new Error('must not download');};
+ const scoped={...c,budget:{id:'reuse-only',limit:4,allowed:['document_collect']}};
+ const duplicate=await t.call(scoped,'document_collect',{urls:['https://example.com/one.docx']},'harness');assert.equal(duplicate.items[0].id,id);assert.equal(duplicate.cacheHit,true);assert.equal(duplicate.networkRequests,0);
+ await assert.rejects(t.call(scoped,'document_collect',{urls:['https://example.com/new.docx']},'harness'),/不发起新下载/);await writeFile(path.join(c.task.workspace,r.items[0].path),'changed');await assert.rejects(t.call(scoped,'document_collect',{urls:['https://example.com/one.docx']},'harness'),/不发起新下载/);assert.equal(network,0);
+}));
 test('真实下载、提取、文件及正文去重；名称和获奖信息不能充当2份全文',async()=>fixture(async(t,c)=>{
  const discovered=await t.call(c,'document_discover',{url:'https://example.com/page'},'harness');assert.equal(discovered.links[0].url,'https://example.com/one.docx');
  const r=await t.call(c,'document_collect',{urls:['https://example.com/one.docx','https://example.com/two.docx']},'harness');assert.equal(r.items[0].state,'parsed');assert(r.items[0].complete);assert.equal(r.items[1].state,'duplicate');

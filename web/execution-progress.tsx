@@ -8,6 +8,8 @@ export function progressText(event:any){
  if(event.type==='tool_done')return '工具已返回，模型将检查结果';
  if(event.type==='tool_error')return '工具执行失败，正在判断下一步';
  if(event.type==='auto_recovery')return '已交给 '+(names[event.data.to]||event.data.to)+' 接续';
+ if(event.type==='engine_error')return '执行器已中断，正在保存记录或判断交接';
+ if(event.type==='stage_limit')return '本阶段达到上限，正在交接已有资料';
  if(event.type==='approval')return '等待你的确认';
  return '执行器正在处理任务';
 }
@@ -15,15 +17,19 @@ export function ExecutionProgress({task,events}:{task:any;events:any[]}){
  const active=['queued','running','waiting','cancelling'].includes(task.status),[,tick]=useState(0);
  useEffect(()=>{if(!active)return;const timer=setInterval(()=>tick(n=>n+1),1000);return()=>clearInterval(timer);},[active]);
  const lastUser=events.findLastIndex(e=>e.type==='user_message'),current=events.slice(Math.max(0,lastUser));
- const event=current.findLast(e=>['model_progress','tool_start','tool_done','tool_error','engine_start','auto_recovery','approval'].includes(e.type));
+ const event=current.findLast(e=>['model_progress','tool_start','tool_done','tool_error','engine_start','engine_error','auto_recovery','stage_limit','approval'].includes(e.type));
  const metrics=current.filter(e=>e.type==='model_progress'&&e.data.phase==='completed');
  const diagnosis=current.findLast(e=>e.type==='failure_diagnosis');
  if(!active&&!metrics.length&&!diagnosis)return null;
+ const budget=current.findLast(e=>e.type==='stage_budget'),start=budget&&current.findLast(e=>e.type==='stage_start'&&e.data.id===budget.data.id);
+ const stageUsed=budget?current.filter(e=>e.type==='tool_start'&&e.data.stageId===budget.data.id&&e.engine===budget.data.engine).length:0;
+ const stageAge=start?Math.max(0,Math.floor((Date.now()-Date.parse(start.created))/1000)):0;
  const age=event?Math.max(0,Math.floor((Date.now()-Date.parse(event.created))/1000)):0;
  return <section className="execution-progress" aria-label="运行状态">
   {active&&<p role="status">{task.status==='cancelling'?'正在停止任务':task.status==='waiting'?'等待你的确认':progressText(event)} <span>· {names[event?.engine]||'工作台'}</span>{age>0&&<small> · 距最近状态 {age} 秒</small>}</p>}
   {active&&event?.type==='model_progress'&&['requesting','waiting_output'].includes(event.data.phase)&&<small>此段可能包含服务端排队或输入处理；尚未收到生成内容。</small>}
+  {active&&budget&&event?.data.stageId===budget.data.id&&<small>本阶段已用 {stageAge} 秒 · 工具 {stageUsed}/{budget.data.maxCalls} 次 · 时间上限 {Math.round(budget.data.timeoutMs/1000)} 秒{budget.data.reserve>0?' · 后续制作预留 '+budget.data.reserve+' 次':''}</small>}
   {metrics.length>0&&<details><summary>模型请求耗时 · {metrics.length} 轮</summary><ul>{metrics.map(e=><li key={e.id}>{names[e.engine]}：首次输出 {e.data.firstOutputMs===undefined?'未提供':(e.data.firstOutputMs/1000).toFixed(1)+' 秒'}，请求合计 {(e.data.elapsedMs/1000).toFixed(1)} 秒</li>)}</ul></details>}
-  {!active&&task.status==='failed'&&diagnosis&&<p>{diagnosis.data.advice}</p>}
+  {!active&&task.status==='failed'&&diagnosis&&<p>{current.findLast(e=>e.type==='final')?.data.outcome==='blocked'?'任务已结束；已有文件保留，尚未满足的条件见最终答复。':diagnosis.data.advice}</p>}
  </section>;
 }

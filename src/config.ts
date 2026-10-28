@@ -40,6 +40,7 @@ export interface Task {
 }
 export interface EventRecord { id: number; taskId: string; type: string; engine: string; data: any; created: string }
 export interface RunContext {
+  budget?:{id:string;limit:number;allowed:string[]};
   navigationOrigins?:string[];
   navigationAllowed?:(url:string)=>boolean;
   onCompleted?:()=>void;

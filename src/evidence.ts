@@ -10,7 +10,7 @@ export class EvidenceLedger {
  record(name:string,args:any,result:any){
   if(result?.error)return;
   const add=(ref:string,kind:'web'|'local',text:any)=>{if(typeof text==='string'&&text.trim()){const key=kind+':'+ref,previous=this.sources.get(key)?.text;this.sources.set(key,{ref,kind,text:(previous&&previous!==text?previous+'\n'+text:text).slice(0,60000),tool:name});}};
-  if(['fetch_url','web_read','browser_open','browser_read','browser_action','crawl_read'].includes(name)&&typeof result?.url==='string')add(result.url,'web',result.text);
+  if(['fetch_url','web_find','web_read','browser_open','browser_read','browser_action','crawl_read'].includes(name)&&typeof result?.url==='string')add(result.url,'web',result.text);
   if(name==='document_discover'&&typeof result?.url==='string')add(result.url,'web',result.text);
   if(name==='document_read'&&typeof result?.url==='string'){add(result.url,'web',result.text);if(result.path)add(result.path,'local',result.text);}
   if(name==='document_search'&&typeof result?.url==='string'){const text=(result.hits||[]).map((h:any)=>h.text).join('\n');add(result.url,'web',text);if(result.path)add(result.path,'local',text);}

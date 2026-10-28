@@ -15,6 +15,7 @@ import {startQwen,qwenStatus} from './runtime.ts';
 import {previewArtifact} from './artifacts.ts';
 import {maintenanceScope} from './maintenance-intent.ts';
 import {preference} from './model-policy.ts';
+import {deliveryRecovery} from './delivery-recovery.ts';
 
 const store=new Store(config.data), workerToken=randomBytes(32).toString('hex'),cookieToken=randomBytes(32).toString('hex');
 const agent=new Agent(store,workerToken);
@@ -144,6 +145,8 @@ const server=http.createServer(async(req,res)=>{
             const next={...prior,...profiles,routingPreference,workflow,maintenance,conversation:history,currentPrompt:current,turnId:randomBytes(8).toString('hex'),requestedIntent,intent:chat?'chat':'task'};
             store.update(task.id,{status:'queued',error:'',result:'',engine,options:JSON.stringify(next)});
           }else {
+            const recovery=deliveryRecovery(task,store.events(task.id));
+            if(recovery&&prior.deliveryRecovery?.version!==recovery.version){prior.deliveryRecovery=recovery;agent.emitEvent(task.id,'delivery_recovery','system',{limit:recovery.limit,note:'已核对阻塞阶段未执行未知写入，恢复窗口合计最多24次本地成果读写及已存来源核对，跨修订共享，不再联网或执行命令；已消耗额度保留。'});}
             const reviews=store.events(task.id).filter(e=>e.type==='stage_done'&&/^balanced\.review\.\d+$/.test(e.data.id||'')&&e.data.value?.passed===false);
             const limit=Math.min(3,(prior.workflow?.maxRevisions??1)+(prior.repairAllowance||0));
             if(prior.workflow?.mode==='balanced'&&reviews.some(e=>Number(e.data.id.split('.').at(-1))>=limit)&&limit<3){prior.repairAllowance=Math.min(2,(prior.repairAllowance||0)+1);agent.emitEvent(task.id,'repair_budget','system',{additionalRevisions:1,totalLimit:limit+1});}

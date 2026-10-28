@@ -6,12 +6,13 @@ import type {Store} from './store.ts';
 import {safePath} from './tools.ts';
 import {ModelRequestError} from './model-request.ts';
 
-const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_read','desktop_search','desktop_read','crawl_status','crawl_read','document_discover','document_read','document_search','document_status','tool_result_read','image_analyze']);
+const readOnly=new Set(['read_file','list_files','search_files','tools_search','skill_read','memory_search','knowledge_search','fetch_url','web_search','web_find','web_read','desktop_search','desktop_read','crawl_status','crawl_read','document_discover','document_read','document_search','document_status','tool_result_read','image_analyze']);
 export const recoveryTools=new Set([...readOnly,'write_file','plan_update','finish_task']);
 const names:Record<string,string>={qwen:'Qwen',harness:'DeepSeek',codex:'Codex'};
 
 export function recoveryDiagnosis(error:unknown){
  const reason=error instanceof Error?error.message:String(error);
+ if((error as any)?.code==='TASK_BLOCKED')return {category:'incomplete',recoverable:false,reason,advice:'任务已明确结束为未完全完成；已有成果保留，剩余条件见最终答复。'};
  if(error instanceof ModelRequestError){const recoverable=error.kind!=='configuration';return {category:'model-'+error.kind,recoverable,reason,advice:recoverable?'模型请求已停止，保留已完成的工具结果，按权限与预算判断能否接续。':'修正模型、密钥、余额或请求配置后再继续，不自动重试。'};}
  if(/HTTP\s*(400|401|402|403|404|405|422)\b|余额不足|模型不存在|model.*not found/i.test(reason))return {category:'configuration',recoverable:false,reason,advice:'检查模型名称、接入地址、余额或凭据，重复请求不能修复这类错误。'};
  if(/用户停止|取消|时限|任务超时/.test(reason))return {category:'stopped',recoverable:false,reason,advice:'已停止，不会自动重新启动任务。'};

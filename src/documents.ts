@@ -70,6 +70,11 @@ export class DocumentService{
   await this.export(ctx,engine);return {items,progress:await this.status(ctx),note:'成功下载或正文提取尚不等于符合题目。读取后用 material_record 登记真实题名、年份与类别。'};
  }
  brief(d:any){return {id:d.id,url:d.finalUrl||d.url,state:d.state,kind:d.kind,path:d.path,textPath:d.textPath,bytes:d.bytes,pages:d.pages,characters:d.characters,complete:!!d.complete,reportSignals:d.signals,duplicateOf:d.duplicateOf,error:d.error};}
+ async reuse(ctx:RunContext,urls:string[],engine:string){
+  if(!Array.isArray(urls)||!urls.length||urls.length>8)throw new Error('提供1–8个已保存URL');const items=[];
+  for(const url of urls){const d:any=this.store.db.prepare("SELECT * FROM documents WHERE taskId=? AND url=? AND state='parsed'").get(ctx.task.id,url);if(!d||!await this.intact(ctx,d))throw new Error('恢复阶段只允许复用已保存且校验通过的原URL，不发起新下载');items.push(this.brief(d));}
+  await this.export(ctx,engine);return {items,cacheHit:true,networkRequests:0,note:'重复提交了已有URL：复用同一文档ID与原件，未生成第二份副本。只验证同URL缓存复用，不等同于不同URL相同字节的去重测试。'};
+ }
  async read(ctx:RunContext,id:string,offset=0){const d=this.owned(ctx,id);if(d.state!=='parsed'||!d.textPath||!await this.intact(ctx,d))throw new Error('正文尚未提取或文件已被修改/删除');if(!Number.isInteger(offset)||offset<0)throw new Error('正文偏移无效');const text=await fs.readFile(await safePath(ctx.task.workspace,d.textPath),'utf8');return {...this.brief(d),text:text.slice(offset,offset+8000),total:text.length,nextOffset:offset+8000<text.length?offset+8000:null};}
  async search(ctx:RunContext,id:string,query:string,offset=0){
   const d=this.owned(ctx,id);if(d.state!=='parsed'||!d.textPath||!await this.intact(ctx,d))throw new Error('正文尚未提取或文件已被修改/删除');

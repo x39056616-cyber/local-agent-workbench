@@ -91,9 +91,11 @@ export class Engines {
     ];
   }
   async run(engine: string, prompt: string, ctx:RunContext, delegate=false):Promise<string> {
-    ctx.signal.throwIfAborted(); ctx.emit('engine_start',engine,{prompt:prompt.slice(0,200)});
+    ctx.signal.throwIfAborted();const started=performance.now(); ctx.emit('engine_start',engine,{prompt:prompt.slice(0,200)});
+    try{
     const result=engine==='qwen'?await this.serialQwen(()=>this.qwen(prompt,ctx),ctx):engine==='harness'?this.provider.read().mode==='api'?await this.deepseek(prompt,ctx):await this.harness(prompt,ctx):await this.codex(prompt,ctx,!delegate);
-    ctx.emit('engine_done',engine,{result:result.slice(0,12000)});return result;
+    ctx.emit('engine_done',engine,{result:result.slice(0,12000),durationMs:Math.round(performance.now()-started)});return result;
+    }catch(error){ctx.emit('engine_error',engine,{message:errorText(ctx.signal.aborted?ctx.signal.reason:error),durationMs:Math.round(performance.now()-started)});throw error;}
   }
   async qwen(prompt:string,ctx:RunContext):Promise<string> {
     const profile=JSON.parse(ctx.task.options||'{}').qwen||{};

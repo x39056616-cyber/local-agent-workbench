@@ -47,7 +47,10 @@ export class Agent extends EventEmitter {
     if(this.active)return;
     const task=this.store.list().reverse().find(t=>t.status==='queued'&&!t.archived&&taskRoute(t).kind!=='chat');if(!task)return;
     const controller=new AbortController();
-    const ctx:RunContext={task,signal:controller.signal,emit:(type,engine,data)=>this.emitEvent(task.id,type,engine,data),tool:(name,args,engine)=>this.tools.call(ctx,name,args,engine)};
+    const ctx:RunContext={task,signal:controller.signal,emit:(type,engine,data)=>this.emitEvent(task.id,type,engine,data),tool:(name,args,engine)=>{
+      const active=this.active?.ctx,scope=active?.task.id===task.id?{...ctx,signal:active.signal,budget:active.budget,emit:active.emit}:ctx;
+      return this.tools.call(scope,name,args,engine);
+    }};
     ctx.specs=this.tools.specsFor(ctx);ctx.emit('tool_selection','system',{names:ctx.specs.map(s=>s.name),available:toolSpecs(false).length});
     this.active={id:task.id,controller,ctx};
     const timeout=setTimeout(()=>controller.abort(new Error('已达到任务时限')),this.store.setting('timeoutMinutes',30)*60000);
@@ -79,7 +82,7 @@ export class Agent extends EventEmitter {
       const rootEngine=evaluation?.kind==='bfcl'?'qwen':workflow.mode==='balanced'?'system':execution?.decision.engine||decision?.engine||taskRoute(task).engine;
       const completion=currentEvents.filter(e=>e.type==='completion'&&e.engine===rootEngine).at(-1);
       if(!completion){this.store.update(task.id,{result});throw new Error('执行器已结束，但未通过 finish_task 提交可验证的完成声明。请检查回答后继续。');}
-      if(completion.data.outcome!=='completed'){const summary=completion.data.summary||'执行器报告任务尚未完成';this.store.update(task.id,{result:summary});ctx.emit('final',rootEngine,{text:summary,files:completion.data.files,outcome:'blocked',turnId:options.turnId||task.id});throw new Error(summary);}
+      if(completion.data.outcome!=='completed'){const summary=completion.data.summary||'执行器报告任务尚未完成';this.store.update(task.id,{result:summary});ctx.emit('final',rootEngine,{text:summary,files:completion.data.files,outcome:'blocked',turnId:options.turnId||task.id});throw Object.assign(new Error(summary),{code:'TASK_BLOCKED'});}
       // Reused legacy completion records must satisfy today's goal as well as fresh tool submissions.
       try{await this.tools.documents.assertComplete(ctx,(completion.data.files||[]).map((f:any)=>typeof f==='string'?f:f.path));}
       catch(error){const text=errorText(error);this.store.update(task.id,{result:text});ctx.emit('final','system',{text,outcome:'blocked',turnId:options.turnId||task.id});throw error;}

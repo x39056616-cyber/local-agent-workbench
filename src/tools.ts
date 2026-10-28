@@ -21,10 +21,12 @@ import {selectTools} from './tool-selection.ts';
 import {CrawlService} from './crawler.ts';
 import {imageInput} from './image-input.ts';
 import {DocumentService} from './documents.ts';
+import {cachedWebFind} from './web-find.ts';
 
 const str=(description:string)=>({type:'string',description});
 const spec=(name:string,description:string,properties:any,required:string[]=[])=>({name,description,parameters:{type:'object',properties,required,additionalProperties:false}});
 const specs=[
+  spec('web_find','按关键词定位网页内容：先查本轮已读正文，未命中再用已连接的只读网页定位工具。返回实际片段与行号，避免从第一页不断翻页。',{url:str('要定位的公开网页URL'),query:str('关键词，最多8项用 | 分隔')},['url','query']),
   spec('document_discover','读取公开来源页，发现PDF/Word附件链接；候选不计入已下载数量。',{url:str('公开来源网页')},['url']),
   spec('document_collect','每批1–8个公开PDF/DOC/DOCX链接，下载原文件、隔离提取正文并去重，自动交付原文件及manifest。支持中断后按原URL重试，不会把HTML当文档。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},sourceUrl:str('可选的附件来源网页URL')},['urls']),
   spec('document_read','分段读取已提取的文档正文。按nextOffset继续，原文件及提取正文均校验hash。',{id:str('document_collect返回的文档ID'),offset:{type:'integer',minimum:0}},['id']),
@@ -160,6 +162,7 @@ export class Tools {
   }
   async call(ctx:RunContext,name:string,args:any,engine:string):Promise<any>{
     ctx.signal.throwIfAborted();
+    if(ctx.budget&&!ctx.budget.allowed.includes(name))throw new Error('成果恢复额度仅允许本地成果读写，禁止联网、命令与递归委派');
     if(JSON.parse(ctx.task.options||'{}').evaluation&&['memory_search','knowledge_search','knowledge_index'].includes(name))throw new Error('评估任务禁用私人记忆和知识检索，避免答案泄漏');
     if(name==='__approval')return {approved:await this.approval(ctx,args.action,args.detail)};
     const definition=toolSpecs(true).find(s=>s.name===name);if(!definition)throw new Error('未知工具：'+name);
@@ -172,11 +175,11 @@ export class Tools {
       if(typeof value==='number'&&((property.minimum!==undefined&&value<property.minimum)||(property.maximum!==undefined&&value>property.maximum)))throw new Error('参数超出允许范围：'+key);
     }
     const events=this.store.events(ctx.task.id),lastUser=events.findLastIndex(e=>e.type==='user_message'),turnId=JSON.parse(ctx.task.options||'{}').turnId||String(lastUser<0?'initial':events[lastUser].id);
-    const countKey=ctx.task.id+':'+turnId+':'+engine,count=(this.counts.get(countKey)??events.slice(lastUser<0?0:lastUser).filter(e=>e.type==='tool_start'&&e.engine===engine&&e.data.name!=='finish_task').length)+(name==='finish_task'?0:1);
-    if(name!=='finish_task'&&count>this.store.setting('maxCalls',30))throw new Error('已达到该执行器工具调用预算。不能继续搜索、采集或写入；仍可 finish_task 提交已有成果，未完成请 outcome=blocked 并明确缺口。');this.counts.set(countKey,count);
+    const countKey=ctx.task.id+':'+turnId+':'+(ctx.budget?'shared':engine)+':'+(ctx.budget?.id||'normal'),count=(this.counts.get(countKey)??events.slice(lastUser<0?0:lastUser).filter(e=>e.type==='tool_start'&&(ctx.budget||e.engine===engine)&&e.data.name!=='finish_task'&&(e.data.budgetId||'')===(ctx.budget?.id||'')).length)+(name==='finish_task'?0:1);
+    if(name!=='finish_task'&&count>(ctx.budget?.limit??this.store.setting('maxCalls',30)))throw new Error('已达到该执行器工具调用预算。不能继续搜索、采集或写入；仍可 finish_task 提交已有成果，未完成请 outcome=blocked 并明确缺口。');this.counts.set(countKey,count);
     const id=randomUUID();
     this.store.db.prepare('INSERT INTO operations VALUES(?,?,?,?,?,?,?)').run(id,ctx.task.id,name,JSON.stringify(args),'running','',new Date().toISOString());
-    ctx.emit('tool_start',engine,{id,name,args});
+    ctx.emit('tool_start',engine,{id,name,args,...(ctx.budget?{budgetId:ctx.budget.id}:{})});
     try{
       const result=await this.execute(ctx,name,args,engine);
       ctx.signal.throwIfAborted();
@@ -190,7 +193,7 @@ export class Tools {
     if(name==='run_command'&&/(?:不要|不得|禁止|不能|不允许|无需|不(?:需要|用)?)(?:运行|执行|调用)(?:任何|系统|沙箱)?命令|do not (?:run|execute) (?:any )?commands/i.test(userPrompt))throw new Error('用户明确禁止运行命令，本任务不会发起命令审批或执行。');
     switch(name){
       case 'document_discover': return this.documents.discover(ctx,a.url);
-      case 'document_collect': return this.documents.collect(ctx,a.urls,a.sourceUrl,engine);
+      case 'document_collect': return ctx.budget?this.documents.reuse(ctx,a.urls,engine):this.documents.collect(ctx,a.urls,a.sourceUrl,engine);
       case 'document_read': return this.documents.read(ctx,a.id,a.offset);
       case 'document_search': return this.documents.search(ctx,a.id,a.query,a.offset);
       case 'document_status': return this.documents.status(ctx);
@@ -243,6 +246,7 @@ export class Tools {
       case 'agent_task': return this.roleTask(ctx,a,engine);
       case 'tool_result_read': {const row=this.store.db.prepare('SELECT result FROM operations WHERE id=? AND taskId=? AND status=?').get(a.operationId,ctx.task.id,'succeeded') as any;if(!row)throw new Error('本任务没有此工具结果');const offset=a.offset||0,limit=a.limit||12000;return {operationId:a.operationId,text:row.result.slice(offset,offset+limit),total:row.result.length,truncated:offset+limit<row.result.length};}
       case 'fetch_url': return publicFetch(a.url,ctx.signal);
+      case 'web_find': {const u=new URL(a.url);if(!['http:','https:'].includes(u.protocol)||u.username||u.password)throw new Error('网页定位URL无效');const cached=cachedWebFind(this.store.events(ctx.task.id),u.href,a.query);if(cached.hits.length)return cached;if(ctx.budget)throw new Error('成果恢复仅查询本轮已读网页缓存，未命中不重新联网');await publicAddress(u.href);const bounded={...ctx,signal:AbortSignal.any([ctx.signal,AbortSignal.timeout(30000)])};return {...await this.desktop.web(bounded,{url:u.href,find:a.query.split('|')[0].trim()}),cached:false,note:'这是实际网页定位返回的文本；仍无字段时如实标为Not found，不逐页盲目翻读。'};}
       case 'web_search': {if(!a.query.trim()||a.query.length>1000)throw new Error('搜索词应为 1–1000 字符');return this.desktop.web(ctx,{query:a.query.trim()});}
       case 'web_read': {const {u}=await publicAddress(a.url);try{return await this.desktop.web(ctx,{url:u.href,...(a.line!==undefined?{line:a.line}:{})});}catch(error){if(ctx.signal.aborted)throw error;ctx.emit('research_fallback',engine,{from:'desktop-web',to:'public-http',url:u.href,reason:errorText(error)});try{return {...await publicFetch(u.href,ctx.signal),backend:'public-http',note:'桌面阅读失败后的公开网页只读回退；不支持桌面行号分页'};}catch(fallback){throw new Error('桌面阅读失败：'+errorText(error)+'；公开网页读取也失败：'+errorText(fallback)+'。请用 tools_search 查询 agent-reach、skill_read 读取指令，或 desktop_search 查找其他只读连接器。');}}}
       case 'tools_search': {const queries=a.query.toLowerCase().split(/[\s,，/]+/).filter(Boolean);return {tools:toolSpecs(false).filter(s=>queries.some((q:string)=>(s.name+s.description).toLowerCase().includes(q))),skills:this.skills.filter(s=>queries.some((q:string)=>(s.name+s.description).toLowerCase().includes(q)||['联网','网页','搜索','资料'].includes(q)&&s.name==='agent-reach')).slice(0,15)};}
