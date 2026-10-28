@@ -15,6 +15,7 @@ import {ModelRouter} from './model-router.ts';
 import {adaptiveExecution} from './adaptive-execution.ts';
 import {researchSubtask} from './subtasks.ts';
 import {roleTask} from './role-tasks.ts';
+import {automaticCooperation} from './cooperation-router.ts';
 
 export class Agent extends EventEmitter {
   store:Store; tools:Tools; engines:Engines; active?: {id:string;controller:AbortController;ctx:RunContext};
@@ -65,7 +66,8 @@ export class Agent extends EventEmitter {
       const capabilityHints=this.tools.skillHints(options.currentPrompt||task.prompt)+(this.tools.documents.goal(ctx)?'\n后端材料验收目标：'+JSON.stringify(this.tools.documents.goal(ctx))+'。先document_status核对已有材料，继续时保留原目标与已下载文件；没有达到目标则明确blocked。':'');
       const savedCrawls=this.tools.crawler.list(ctx).jobs;
       const crawlHints=savedCrawls.length?'本任务已有采集记录（包括服务中断时保存的队列），不要重新搜索或创建同样的采集。先 crawl_status 查看，再对 interrupted/paused 的原 jobId 调用 crawl_resume；已成功页面直接 crawl_read。不得把状态目录或空的 sources.md 当成已取得的作品。已有采集：'+JSON.stringify(savedCrawls):'';
-      const workflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
+      const requestedWorkflow=validateWorkflow(JSON.parse(task.options||'{}').workflow,task.engine);
+      const workflow=await automaticCooperation(ctx,requestedWorkflow,this.router,this.store)||requestedWorkflow;
       ctx.emit('workflow_start','system',workflow);
       const activate=(c:RunContext)=>{if(this.active)this.active.ctx=c;},runner=new Workflows(this.engines,this.store,activate);
       const direct=!evaluation&&['native','adaptive'].includes(workflow.mode);
@@ -94,7 +96,7 @@ export class Agent extends EventEmitter {
       if(execution)this.router.record(ctx,execution.decision,'completed',execution.durationMs);
       this.store.update(task.id,{status:'succeeded',result:answer});ctx.emit('status','system',{status:'succeeded',result:answer});
     }catch(e){const status=controller.signal.aborted?'cancelled':'failed';const message=controller.signal.aborted?errorText(controller.signal.reason):errorText(e);this.store.update(task.id,{status,error:message});if(!controller.signal.aborted){const diagnosis=recoveryDiagnosis(e);ctx.emit('failure_diagnosis','system',diagnosis);ctx.emit('message','system',{text:'任务尚未完成：'+message+'\n'+diagnosis.advice+' 已有记录和成果已保留。'});}ctx.emit('status','system',{status,error:message});}
-    finally{await this.tools.crawler.close(task.id);await this.tools.browser.close(task.id);clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
+    finally{this.router.recordCooperation(ctx);await this.tools.crawler.close(task.id);await this.tools.browser.close(task.id);clearTimeout(timeout);for(const [id,a] of this.approvals)if(a.taskId===task.id){a.resolve(false);this.approvals.delete(id);}this.active=undefined;void this.pump();}
   }
   cancel(id:string){const task=this.store.get(id);if(!task)throw new Error('任务不存在');
     if(this.chats.has(id)){this.chats.get(id)!.abort(new Error('用户停止了对话'));}

@@ -8,6 +8,8 @@ export function RoutingPreference({value,onChange}:{value:string;onChange:(value
 export function ModelRouting({task,events}:{task:any;events:any[]}){
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const last=events.findLastIndex(e=>e.type==='user_message'),current=events.slice(Math.max(0,last)),decision=current.findLast(e=>e.type==='model_route')?.data;
+ const cooperation=current.findLast(e=>e.type==='cooperation_route')?.data;
+ if(cooperation)return <section className="model-routing" aria-label="本次自动分工"><div className="model-routing-heading"><strong>按阶段自动分工</strong><span>{cooperation.choices.length} 个职责</span></div><p>{cooperation.reason}</p><div className="routing-candidates">{cooperation.choices.map((c:any)=><div key={c.id}><b>{cooperation.workflow.automatic.duties.find((d:any)=>d.id===c.id)?.name} · {modelNames[c.engine]}</b><span>{c.reason}</span></div>)}</div><details><summary>查看分工依据</summary><p className="muted">{cooperation.basis}。这是派发计划；实际执行以阶段记录和模型返回为准。</p><pre>{JSON.stringify(cooperation.choices,null,2)}</pre></details></section>;
  if(!decision)return null;
  const final=current.some(e=>e.type==='final'&&e.engine===decision.engine),rating=current.findLast(e=>e.type==='routing_feedback'&&e.data.decisionId===decision.id)?.data.rating;
  const rate=async(value:number)=>{setBusy(true);setError('');try{await api('/tasks/'+task.id+'/routing-feedback','POST',{decisionId:decision.id,rating:value});}catch(e:any){setError(e.message);}finally{setBusy(false);}};

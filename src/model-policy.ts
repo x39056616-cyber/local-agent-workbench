@@ -18,6 +18,8 @@ export function classifyTask(text:string):Category{
  if(/(?:联网|调研|搜集|搜索|查找|查阅|采集|抓取|爬取|帮我找|查一下|最新|本月|这一个月|近[一\d]+[天月周])/.test(p)&&/(?:github|项目|资料|新闻|文献|论文|来源|网站|网页|趋势|热榜|资讯)/i.test(p)||/https?:\/\//i.test(p))return 'research';
  if(/(?:严格证明|数学证明|复杂推理|深入推理|形式化证明|证明定理|prove.*theorem)/i.test(p))return 'reasoning';
  if(/(?:提取|分类|去重|格式转换|转成|转换为|总结以下|总结这段|摘要|整理附件|读取附件|文本词频|识图|看图|截图|照片|图片|附件文件：|\.(?:png|jpe?g|webp)\b)/i.test(p))return 'extract';
+ if(/\b(?:extract|classify|deduplicat|summariz|convert)\w*\b/i.test(p))return 'extract';
+ if(/\b(?:write|draft|analy[sz]e|compare|comparison|report|translate)\b/i.test(p))return 'writing';
  if(/(?:撰写|写一|报告|文章|文案|分析|比较|方案|建议|翻译|总结)/.test(p)||p.length>600)return 'writing';
  return 'chat';
 }
@@ -43,3 +45,9 @@ export function rankModels(category:Category,policy:Preference,candidates:Candid
  }).sort((a,b)=>Number(b.available)-Number(a.available)||b.score-a.score);
 }
 export function initialModel(text:string,policy:Preference='balanced'):ModelEngine{return rankModels(classifyTask(text),policy,(['qwen','harness','codex'] as ModelEngine[]).map(engine=>({engine,profile:'preview',available:true})))[0].engine;}
+// 均衡/节省模式下，小于0.02的评分差不值得升级到更贵模型；明显质量差仍升级。
+export function chooseModel<T extends {engine:ModelEngine;score:number}>(ranked:T[],policy:Preference):T|undefined{
+ const best=ranked[0];if(!best)return;
+ if(policy==='quality')return best;
+ const cost={qwen:0,harness:1,codex:2};return ranked.filter(c=>best.score-c.score<=.02000001).sort((a,b)=>cost[a.engine]-cost[b.engine]||b.score-a.score)[0];
+}

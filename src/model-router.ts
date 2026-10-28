@@ -5,8 +5,8 @@ import {config} from './config.ts';
 import type {Task,RunContext} from './config.ts';
 import type {Store} from './store.ts';
 import {DeepSeekProvider} from './providers.ts';
-import {categories,classifyTask,modelNames,preference,rankModels} from './model-policy.ts';
-import type {ModelEngine,Candidate} from './model-policy.ts';
+import {categories,classifyTask,modelNames,preference,rankModels,chooseModel} from './model-policy.ts';
+import type {ModelEngine,Candidate,Category} from './model-policy.ts';
 import {recoveryDiagnosis} from './supervisor.ts';
 
 export class ModelRouter {
@@ -21,13 +21,13 @@ export class ModelRouter {
   let defaults='default';if(engine==='codex')try{const file=path.join(process.env.USERPROFILE||'', '.codex','config.toml');defaults=createHash('sha256').update(readFileSync(file)).digest('hex').slice(0,16);}catch{}
   return JSON.stringify({model:p.model||(engine==='qwen'?config.qwenModel:engine==='harness'?(d.mode==='api'?d.model:'deepseek-flash'):defaults),effort:p.effort||'inherit',source:engine==='harness'?d.mode:engine,...(engine==='harness'&&d.mode==='api'?{endpoint:createHash('sha256').update(d.baseUrl).digest('hex').slice(0,16)}:{})});
  }
- async candidates(task:Task):Promise<Candidate[]>{
+ async candidates(task:Task,stageCategory?:Category):Promise<Candidate[]>{
   if(!this.availability||Date.now()-this.availability.at>10000){
    const provider=new DeepSeekProvider().status();let qwen=false;
    try{const r=await fetch(config.qwenBase+'/models',{signal:AbortSignal.timeout(700)});if(r.ok){const data=await r.json() as any;qwen=data.data?.some((m:any)=>m.id===config.qwenModel)===true;}}catch{}
    this.availability={at:Date.now(),items:{qwen:{available:qwen,reason:qwen?'':'本地 API 未就绪或未列出指定模型'},harness:{available:provider.mode==='api'?provider.hasKey:existsSync(config.harnessExe),reason:'DeepSeek 接入缺少密钥或桌面程序'},codex:{available:existsSync(config.codex)||config.codex==='codex',reason:'未找到 Codex 程序'}}};
   }
-  const category=classifyTask(JSON.parse(task.options||'{}').currentPrompt||task.prompt);
+  const category=stageCategory||classifyTask(JSON.parse(task.options||'{}').currentPrompt||task.prompt);
   return (['qwen','harness','codex'] as ModelEngine[]).map(engine=>{const p=this.profile(task,engine),state=this.availability!.items[engine];return {engine,profile:p,available:state.available,unavailableReason:state.available?'':state.reason,observations:this.store.db.prepare('SELECT status,durationMs,rating FROM routing_samples WHERE category=? AND engine=? AND profile=? ORDER BY created DESC,rowid DESC LIMIT 40').all(category,engine,p) as any[]};});
  }
  async select(ctx:RunContext,exclude:string[]=[],purpose:'recovery'|'subtask'='recovery'){
@@ -38,7 +38,7 @@ export class ModelRouter {
   if(saved){ctx.emit('model_route_reused','system',{decisionId:saved.data.id,engine:saved.data.engine,reason:'沿用本轮已保存的选模决定'});return saved.data;}
   const category=classifyTask(o.currentPrompt||ctx.task.prompt),policy=preference(o.routingPreference??this.store.setting('routingPreference','balanced'));
   const candidates=rankModels(category,policy,await this.candidates(ctx.task));ctx.signal.throwIfAborted();
-  const chosen=ctx.task.engine!=='auto'?candidates.find(c=>c.engine===ctx.task.engine):candidates.find(c=>c.available&&!exclude.includes(c.engine));
+  const chosen=ctx.task.engine!=='auto'?candidates.find(c=>c.engine===ctx.task.engine):chooseModel(candidates.filter(c=>c.available&&!exclude.includes(c.engine)),policy);
   if(!chosen)throw new Error('没有可用的执行模型，请检查模型连接；已有操作不会重放');
   const informed=chosen.ratings>0;
   const ideal=[...candidates].sort((a,b)=>b.score-a.score)[0];
@@ -52,6 +52,19 @@ export class ModelRouter {
   // 取消、拒绝审批、来源权限等不记成模型质量/可靠性失败。
   if(status!=='completed'&&(ctx.signal.aborted||recoveryDiagnosis(error).category!=='engine-or-protocol'))return;
   this.store.db.prepare('INSERT INTO routing_samples(id,taskId,turnId,engine,category,profile,status,durationMs,created) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,durationMs=excluded.durationMs').run(decision.id,ctx.task.id,decision.turnId,decision.engine,decision.category,decision.profile,status==='completed'?'completed':'engine_error',Math.round(durationMs),new Date().toISOString());
+ }
+ recordCooperation(ctx:RunContext){
+  const events=this.store.events(ctx.task.id),last=events.findLastIndex(e=>e.type==='user_message'),current=events.slice(Math.max(0,last)),plan=current.find(e=>e.type==='cooperation_route')?.data;
+  if(!plan||JSON.parse(ctx.task.options||'{}').evaluation)return;
+  const turnId=JSON.parse(ctx.task.options||'{}').turnId||ctx.task.id;
+  for(const event of current.filter(e=>['stage_done','subagent_done'].includes(e.type))){
+   const duty=event.data.id==='balanced.plan'?'researcher':event.data.id==='balanced.extract'?'extractor':event.data.id?.startsWith('balanced.execute.')?'builder':event.data.id?.startsWith('balanced.review.')?'reviewer':'';
+   const choice=plan.choices.find((c:any)=>c.id===duty),start=current.find(e=>['stage_start','subagent_start'].includes(e.type)&&e.data.key===event.data.key);
+   if(!choice||!start)continue;
+   const id=createHash('sha256').update(JSON.stringify([ctx.task.id,turnId,event.data.key,event.engine])).digest('hex');
+   // 阶段完成只记录运行与耗时，不当作用户质量好评；无最终交付的阶段不能独立获评。
+   this.store.db.prepare('INSERT OR IGNORE INTO routing_samples(id,taskId,turnId,engine,category,profile,status,durationMs,created) VALUES(?,?,?,?,?,?,?,?,?)').run(id,ctx.task.id,turnId,event.engine,choice.category,this.profile(ctx.task,event.engine as ModelEngine),'completed',Math.max(0,Date.parse(event.created)-Date.parse(start.created)),event.created);
+  }
  }
  feedback(taskId:string,id:string,rating:unknown){
   if(rating!==1&&rating!==-1)throw new Error('评价无效');

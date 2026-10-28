@@ -71,6 +71,15 @@ export class DocumentService{
  }
  brief(d:any){return {id:d.id,url:d.finalUrl||d.url,state:d.state,kind:d.kind,path:d.path,textPath:d.textPath,bytes:d.bytes,pages:d.pages,characters:d.characters,complete:!!d.complete,reportSignals:d.signals,duplicateOf:d.duplicateOf,error:d.error};}
  async read(ctx:RunContext,id:string,offset=0){const d=this.owned(ctx,id);if(d.state!=='parsed'||!d.textPath||!await this.intact(ctx,d))throw new Error('正文尚未提取或文件已被修改/删除');if(!Number.isInteger(offset)||offset<0)throw new Error('正文偏移无效');const text=await fs.readFile(await safePath(ctx.task.workspace,d.textPath),'utf8');return {...this.brief(d),text:text.slice(offset,offset+8000),total:text.length,nextOffset:offset+8000<text.length?offset+8000:null};}
+ async search(ctx:RunContext,id:string,query:string,offset=0){
+  const d=this.owned(ctx,id);if(d.state!=='parsed'||!d.textPath||!await this.intact(ctx,d))throw new Error('正文尚未提取或文件已被修改/删除');
+  if(typeof query!=='string'||!query.trim()||query.length>300||!Number.isInteger(offset)||offset<0)throw new Error('提供1–300字符的关键词和非负偏移');
+  const text=await fs.readFile(await safePath(ctx.task.workspace,d.textPath),'utf8'),lower=text.toLowerCase();
+  const terms=[...new Set(query.toLowerCase().split('|').map(t=>t.trim()).filter(Boolean))];if(terms.length>8)throw new Error('一次最多8个关键词，用 | 分隔；不是正则表达式');
+  const hits:any[]=[];let cursor=offset;
+  while(hits.length<8&&cursor<text.length){const positions=terms.map(t=>lower.indexOf(t,cursor)).filter(n=>n>=0);if(!positions.length)break;const at=Math.min(...positions),start=Math.max(0,at-250),end=Math.min(text.length,at+850),page=[...text.slice(0,at).matchAll(/\[第 (\d+) 页\]/g)].at(-1)?.[1];hits.push({offset:start,page:page?Number(page):null,text:text.slice(start,end)});cursor=end;}
+  return {id:d.id,url:d.finalUrl||d.url,path:d.path,textPath:d.textPath,hits,total:text.length,nextOffset:hits.length===8&&cursor<text.length?cursor:null,note:'仅为实际命中的局部正文，不代表全文已读；page为提取器物理PDF页序，缺失时使用原文章节定位。'};
+ }
  async source(ctx:RunContext,url:string){const own:any=this.store.db.prepare('SELECT text FROM document_sources WHERE taskId=? AND url=?').get(ctx.task.id,url);if(own)return own.text;
   let text='';for(const e of this.store.events(ctx.task.id))if(e.type==='tool_done'&&['web_read','fetch_url','crawl_read'].includes(e.data.name)&&e.data.result?.url===url)text+='\n'+e.data.result.text;return text;
  }

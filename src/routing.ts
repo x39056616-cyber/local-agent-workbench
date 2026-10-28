@@ -43,5 +43,5 @@ export function taskRoute(task:{prompt:string;engine:string;options?:string;hasA
  const chat=options.intent==='chat'||options.intent!=='task'&&!options.maintenance&&!task.hasAttachments&&!['react','plan','reflection','team'].includes(mode)&&!requiresTools(prompt);
  const selected=task.engine==='auto'?initialModel(prompt,options.routingPreference):task.engine;
  if(chat)return {kind:'chat',engine:selected,reason:'普通对话直接请求所选模型，不规划、不检索、不生成文件'};
- return {kind:'task',engine:selected,reason:mode==='balanced'?'工具任务：按已指定的三个协作角色执行':'按任务与偏好选择引擎；实际选择还会检查连接和本机反馈'};
+ return {kind:'task',engine:selected,reason:mode==='balanced'?'工具任务：按已指定的三个协作角色执行':mode==='adaptive'?'简单任务直接执行，复合任务按阶段分工；实际派发检查连接和本机记录':'按任务与偏好选择引擎；实际选择还会检查连接和本机反馈'};
 }

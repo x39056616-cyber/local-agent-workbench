@@ -57,7 +57,7 @@ Codex 和 Harness 可沿用各自已有账号。DeepSeek 也可在本机「运�
 
 ## 工具与执行边界
 
-内置工具：`plan_update`、`list_files`、`read_file`、`write_file`、`search_files`、`fetch_url`、`run_command`、`tools_search`、`skill_read`、`memory_search`、`knowledge_search`、`knowledge_index`、`desktop_search`、`desktop_call`、`finish_task`。默认智能选模由后端直接派发，避免只有 Codex 拥有主控；显式协作机制仍按其角色分派。
+内置工具：`plan_update`、`list_files`、`read_file`、`write_file`、`search_files`、`fetch_url`、`run_command`、`tools_search`、`skill_read`、`memory_search`、`knowledge_search`、`knowledge_index`、`desktop_search`、`desktop_call`、`finish_task`。默认自动分工由后端识别复合任务，并为获取、提取、制作、核验分别选择模型；普通问答直接执行。详见 [按阶段自动分工](AUTO-COOPERATION.md)。显式协作机制仍按其角色分派。
 
 所有文件工具检查规范化路径与 junction/symlink。命令经 Codex 的 `workspaceWrite` 沙箱执行，网页显示确认；拒绝后不执行，不降级为无沙箱命令。共享工具调用预算可以在设置中调整；Codex/Harness 内部原生操作遵守各自运行时限制。
 

@@ -28,6 +28,7 @@ const specs=[
   spec('document_discover','读取公开来源页，发现PDF/Word附件链接；候选不计入已下载数量。',{url:str('公开来源网页')},['url']),
   spec('document_collect','每批1–8个公开PDF/DOC/DOCX链接，下载原文件、隔离提取正文并去重，自动交付原文件及manifest。支持中断后按原URL重试，不会把HTML当文档。',{urls:{type:'array',items:{type:'string'},minItems:1,maxItems:8},sourceUrl:str('可选的附件来源网页URL')},['urls']),
   spec('document_read','分段读取已提取的文档正文。按nextOffset继续，原文件及提取正文均校验hash。',{id:str('document_collect返回的文档ID'),offset:{type:'integer',minimum:0}},['id']),
+  spec('document_search','在已提取PDF/Word正文中定位关键词，返回原文片段、偏移和物理PDF页序。关键词可用 | 分隔，最多8个；按nextOffset继续。不是全文阅读证明。',{id:str('本任务的文档ID'),query:str('要定位的关键词，不是正则表达式'),offset:{type:'integer',minimum:0}},['id','query']),
   spec('document_status','查看本任务真实文档、材料登记与目标差距。名称/获奖信息/报告全文分别计数。',{}),
   spec('material_record','每批登记1–20项真实材料。title仅名称，award含奖项证据，fulltext必须关联有效文档并满足报告正文结构。题名、年份、奖项都须来自实际读取正文，不允许模型记忆充数。',{items:{type:'array',minItems:1,maxItems:20,items:{type:'object',properties:{title:str('真实作品或文档题名'),kind:{type:'string',enum:['title','award','fulltext']},sourceUrl:str('本任务实际读取过的来源URL'),quote:str('含真实题名的连续原文摘录，8–1500字'),year:{type:'integer'},yearQuote:str('含年份的原文摘录'),awardQuote:str('含本作品题名及奖项的连续原文摘录'),documentId:str('fulltext必须提供下载文档ID')},required:['title','kind','quote'],additionalProperties:false}}},['items']),
   spec('image_analyze','使用本地 Qwen 的视觉模型实际识别工作区 PNG、JPEG、WebP 图片，返回内容描述或识别文字。不要用 read_file 读取图片二进制；无需云端上传。',{path:str('任务目录内的图片相对路径'),question:str('需要从图片确认的具体内容，默认描述图片并识别可见文字')},['path']),
@@ -191,6 +192,7 @@ export class Tools {
       case 'document_discover': return this.documents.discover(ctx,a.url);
       case 'document_collect': return this.documents.collect(ctx,a.urls,a.sourceUrl,engine);
       case 'document_read': return this.documents.read(ctx,a.id,a.offset);
+      case 'document_search': return this.documents.search(ctx,a.id,a.query,a.offset);
       case 'document_status': return this.documents.status(ctx);
       case 'material_record': return this.documents.record(ctx,a.items,engine);
       case 'image_analyze': {

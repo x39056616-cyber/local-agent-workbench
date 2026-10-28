@@ -44,7 +44,7 @@ export interface RunContext {
   navigationAllowed?:(url:string)=>boolean;
   onCompleted?:()=>void;
   chat?: boolean;
-  stage?: {id:string;readOnly:boolean;onSubmitted?:()=>void}; specs?: any[];
+  stage?: {id:string;readOnly:boolean;onSubmitted?:()=>void;isSubmitted?:()=>boolean}; specs?: any[];
   task: Task; signal: AbortSignal; emit: (type: string, engine: string, data: any) => void;
   tool: (name: string, args: any, engine: string) => Promise<any>;
 }
